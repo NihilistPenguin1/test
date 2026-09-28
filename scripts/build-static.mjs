@@ -6,7 +6,7 @@ import { mkdir, writeFile, cp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getNews, getMarketData, getWeatherData } from '../server/store.js';
-import { enrichImages, fetchArticle, resolveGoogleBatch } from '../server/enrich.js';
+import { enrichImages, fetchArticle, resolveGoogleBatch, isArticleUrl } from '../server/enrich.js';
 import { SOURCES, CATEGORIES } from '../server/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -26,6 +26,14 @@ function mapLimit(arr, limit, fn) {
 }
 
 const fullName = (id) => `${encodeURIComponent(id)}.json`;
+
+function isStoryLink(link) {
+  try {
+    const u = new URL(link);
+    if (u.hostname === 'news.google.com' && /\/(?:rss\/)?articles\/[A-Za-z0-9_-]{10,}/.test(u.pathname)) return true;
+    return isArticleUrl(link);
+  } catch { return false; }
+}
 
 function note(msg) {
   console.log(msg);
@@ -52,7 +60,7 @@ async function main() {
     let n = 0;
     for (const it of items) {
       const real = resolved.get(it.link);
-      if (real && real !== it.link && !real.includes('news.google.com')) {
+      if (real && real !== it.link && isArticleUrl(real)) {
         it.link = real;
         n++;
       }
@@ -61,6 +69,14 @@ async function main() {
   } catch (e) {
     console.log(`  google news çözümü başarısız: ${e.message}`);
   }
+
+  // Google CSS/asset gibi kazara çözülen veya bozuk RSS linklerini yayına sokma.
+  const badLinks = items.filter((it) => !isStoryLink(it.link));
+  if (badLinks.length) {
+    const badIds = new Set(badLinks.map((it) => it.id));
+    for (let i = items.length - 1; i >= 0; i--) if (badIds.has(items[i].id)) items.splice(i, 1);
+  }
+  note(`makale bağlantıları: ${items.length} geçerli, ${badLinks.length} hatalı kayıt ayıklandı`);
 
   // Eksik kapak görsellerini 5 katmanlı motorla tamamla (HEPSİ)
   try {
@@ -92,7 +108,8 @@ async function main() {
     getMarketData().catch((e) => ({ items: [], live: false, error: e.message })),
     getWeatherData().catch((e) => ({ live: false, error: e.message })),
   ]);
-  note(`piyasa: ${market.items?.length || 0} kalem (live=${market.live}) · hava (live=${weather.live})`);
+  const marketSamples = (market.items || []).filter((m) => m.sample).map((m) => m.key);
+  note(`piyasa: ${market.items?.length || 0} kalem (live=${market.live}, örnek=${marketSamples.join(',') || 'yok'}) · hava (live=${weather.live})`);
 
   /* ---------- 2) dist/ ağacını kur (tek seferde) ---------- */
 

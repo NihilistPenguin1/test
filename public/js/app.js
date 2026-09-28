@@ -158,8 +158,13 @@
         <span class="ticker-price">${fmtNum(m.price, m.decimals)}</span>
         <span class="ticker-chg ${up ? 'up' : 'down'}">${up ? '▲' : '▼'} %${fmtNum(Math.abs(m.changePercent), 2)}</span>
       </span>`;
-    }).join('') + `<span class="ticker-item"><span class="ticker-name">${market.live ? 'Canlı veri' : 'Örnek veri'}</span>
-      <span class="ticker-price" style="color:${market.live ? '#34d399' : '#b3a595'}">${market.live ? '●' : '○'}</span></span>`;
+    }).join('') + (() => {
+      const partial = market.items.some((m) => m.sample);
+      const label = market.live ? (partial ? 'Kısmen canlı' : 'Canlı veri') : 'Örnek veri';
+      const color = market.live ? (partial ? '#fbbf24' : '#34d399') : '#b3a595';
+      return `<span class="ticker-item"><span class="ticker-name">${label}</span>
+        <span class="ticker-price" style="color:${color}">${market.live ? '●' : '○'}</span></span>`;
+    })();
   }
 
   function renderMarketPanel(market) {
