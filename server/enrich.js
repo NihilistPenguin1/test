@@ -61,6 +61,18 @@ async function fetchJina(url, timeoutMs = 15000) {
    ============================================================ */
 const isGoogleHost = (h) => /(?:^|\.)(google|googleapis|gstatic|googleusercontent|ggpht|youtube|ytimg|blogger|blogspot)\./i.test(h);
 
+export function isArticleUrl(value) {
+  try {
+    const u = new URL(value);
+    return /^https?:$/.test(u.protocol)
+      && !isGoogleHost(u.hostname)
+      && !/\.(js|css|png|jpe?g|gif|svg|ico|woff2?|json|xml)$/i.test(u.pathname)
+      && !/family=|stylesheet|favicon/i.test(value)
+      && !/\/(css|fonts|static|assets|images?|img|wp-includes)\//i.test(u.pathname)
+      && u.pathname.length > 1;
+  } catch { return false; }
+}
+
 function unescapeUrl(u) {
   return String(u)
     .replace(/\\u003d/g, '=').replace(/\\u0026/g, '&').replace(/\\u002f/g, '/')
@@ -118,7 +130,7 @@ async function getDecodeParams(id) {
     try {
       const { html } = await fetchHtml(u, 12000);
       const direct = findRedirectTarget(html);
-      if (direct && !direct.includes('news.google.com')) {
+      if (direct && isArticleUrl(direct)) {
         out = { id, direct };
         break;
       }
@@ -139,7 +151,7 @@ export function parseBatchResponse(text) {
   const urls = [];
   const push = (u) => {
     const clean = unescapeUrl(u);
-    if (/^https?:/.test(clean) && !/news\.google\.com/.test(clean)) urls.push(clean);
+    if (isArticleUrl(clean)) urls.push(clean);
   };
   for (const part of String(text || '').split('\n\n')) {
     const body = part.replace(/^\)\]\}'/, '').trim();
@@ -183,7 +195,7 @@ export async function resolveGoogleBatch(urls) {
     const id = googleArticleId(url);
     if (!id) continue;
     const cached = googleUrlCache.get(url) || googleUrlCache.get(id);
-    if (cached && !cached.includes('news.google.com')) {
+    if (cached && isArticleUrl(cached)) {
       out.set(url, cached);
       continue;
     }
@@ -292,7 +304,7 @@ export async function resolveArticleUrl(url) {
     // Son çare: jina JS ile yönlendirmeyi takip eder ve sayfayı render eder
     const md = await fetchJina(url, 18000);
     const m = md.match(/^URL Source:\s*(https?:\/\/\S+)/m);
-    if (m && m[1] && !m[1].includes('news.google.com')) {
+    if (m && isArticleUrl(m[1])) {
       googleUrlCache.set(url, m[1]);
       return m[1];
     }
@@ -489,7 +501,7 @@ export async function enrichImages(items, max = 24, concurrency = 8) {
       const map = await resolveGoogleBatch(googleItems.map((it) => it.link));
       for (const it of googleItems) {
         const real = map.get(it.link);
-        if (real && !real.includes('news.google.com')) it.link = real;
+        if (real && isArticleUrl(real)) it.link = real;
       }
     }
   } catch { /* bireysel katmanlar dener */ }

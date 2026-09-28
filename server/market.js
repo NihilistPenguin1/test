@@ -25,39 +25,52 @@ async function fetchJson(url, timeoutMs = 8000, headers = {}) {
 }
 
 /* Yahoo cookie+crumb akışı (yfinance yöntemi) — bazı IP'lerde crumb'sız 401 */
-let yahooAuth = null;
-async function getYahooAuth() {
-  if (yahooAuth) return yahooAuth;
-  yahooAuth = { cookie: '', crumb: '' };
-  try {
-    const cRes = await fetch('https://fc.yahoo.com', {
-      headers: { 'User-Agent': USER_AGENT },
-      redirect: 'manual',
-      signal: AbortSignal.timeout(8000),
-    });
-    const cookies = (cRes.headers.getSetCookie?.() || []).map((c) => c.split(';')[0]).join('; ');
-    const crumbRes = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
-      headers: { 'User-Agent': USER_AGENT, Cookie: cookies, Accept: 'text/plain' },
-      signal: AbortSignal.timeout(8000),
-    });
-    const crumb = (await crumbRes.text()).trim();
-    if (cookies && crumb && crumb.length < 30) yahooAuth = { cookie: cookies, crumb };
-  } catch { /* crumb'sız devam */ }
-  return yahooAuth;
+let yahooAuthP = null;
+function getYahooAuth() {
+  // Promise önbelleği: eşzamanlı istekler tek hesaplamayı paylaşır (yarış yok)
+  if (!yahooAuthP) {
+    yahooAuthP = (async () => {
+      try {
+        const cRes = await fetch('https://fc.yahoo.com', {
+          headers: { 'User-Agent': USER_AGENT },
+          redirect: 'manual',
+          signal: AbortSignal.timeout(8000),
+        });
+        const cookies = (cRes.headers.getSetCookie?.() || []).map((c) => c.split(';')[0]).join('; ');
+        const crumbRes = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
+          headers: { 'User-Agent': USER_AGENT, Cookie: cookies, Accept: 'text/plain' },
+          signal: AbortSignal.timeout(8000),
+        });
+        const crumb = (await crumbRes.text()).trim();
+        if (cookies && crumb && crumb.length < 30) return { cookie: cookies, crumb };
+      } catch { /* crumb'sız devam */ }
+      return { cookie: '', crumb: '' };
+    })();
+  }
+  return yahooAuthP;
 }
 
 async function fetchQuote(sym) {
   const auth = await getYahooAuth();
-  const suffix = auth.crumb ? `&crumb=${encodeURIComponent(auth.crumb)}` : '';
-  // Yahoo iki uç nokta dener (biri bazen engellenir)
-  let json = null;
+  // Kimlik doğrulamalı istek, ardından crumbsız istek: Yahoo bazen crumb'i
+  // yalnızca bazı enstrümanlara uygular (BIST endeksi dahil). Her uç noktada
+  // iki modu da dener; bu yüzden hata tek sembolü seed'e düşürmez.
+  const modes = [
+    auth.crumb ? { suffix: `&crumb=${encodeURIComponent(auth.crumb)}`, headers: auth.cookie ? { Cookie: auth.cookie } : {} } : null,
+    auth.cookie ? { suffix: '', headers: { Cookie: auth.cookie } } : null,
+    { suffix: '', headers: {} },
+  ].filter(Boolean);
+  let result = null;
   for (const host of ['query1.finance.yahoo.com', 'query2.finance.yahoo.com']) {
-    try {
-      json = await fetchJson(`https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d${suffix}`, 10000, auth.cookie ? { Cookie: auth.cookie } : {});
-      if (json?.chart?.result?.[0]) break;
-    } catch { /* sonraki uç nokta */ }
+    for (const mode of modes) {
+      try {
+        const json = await fetchJson(`https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d${mode.suffix}`, 10000, mode.headers);
+        result = json?.chart?.result?.[0];
+        if (result) break;
+      } catch { /* sonraki auth modu/uç nokta */ }
+    }
+    if (result) break;
   }
-  const result = json?.chart?.result?.[0];
   if (!result) throw new Error(`no quote for ${sym}`);
   const meta = result.meta;
   const price = meta.regularMarketPrice ?? meta.previousClose ?? meta.chartPreviousClose;
