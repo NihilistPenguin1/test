@@ -14,17 +14,46 @@ const SYMBOLS = [
 
 let cache = { at: 0, data: null };
 
-async function fetchJson(url, timeoutMs = 8000) {
-  const txt = await fetchText(url, timeoutMs);
-  return JSON.parse(txt);
+async function fetchJson(url, timeoutMs = 8000, headers = {}) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json,text/plain,*/*', ...headers },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return JSON.parse(await res.text());
+}
+
+/* Yahoo cookie+crumb akışı (yfinance yöntemi) — bazı IP'lerde crumb'sız 401 */
+let yahooAuth = null;
+async function getYahooAuth() {
+  if (yahooAuth) return yahooAuth;
+  yahooAuth = { cookie: '', crumb: '' };
+  try {
+    const cRes = await fetch('https://fc.yahoo.com', {
+      headers: { 'User-Agent': USER_AGENT },
+      redirect: 'manual',
+      signal: AbortSignal.timeout(8000),
+    });
+    const cookies = (cRes.headers.getSetCookie?.() || []).map((c) => c.split(';')[0]).join('; ');
+    const crumbRes = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
+      headers: { 'User-Agent': USER_AGENT, Cookie: cookies, Accept: 'text/plain' },
+      signal: AbortSignal.timeout(8000),
+    });
+    const crumb = (await crumbRes.text()).trim();
+    if (cookies && crumb && crumb.length < 30) yahooAuth = { cookie: cookies, crumb };
+  } catch { /* crumb'sız devam */ }
+  return yahooAuth;
 }
 
 async function fetchQuote(sym) {
+  const auth = await getYahooAuth();
+  const suffix = auth.crumb ? `&crumb=${encodeURIComponent(auth.crumb)}` : '';
   // Yahoo iki uç nokta dener (biri bazen engellenir)
   let json = null;
   for (const host of ['query1.finance.yahoo.com', 'query2.finance.yahoo.com']) {
     try {
-      json = await fetchJson(`https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d`, 10000);
+      json = await fetchJson(`https://${host}/v8/finance/chart/${encodeURIComponent(sym)}?interval=1d&range=5d${suffix}`, 10000, auth.cookie ? { Cookie: auth.cookie } : {});
       if (json?.chart?.result?.[0]) break;
     } catch { /* sonraki uç nokta */ }
   }
@@ -73,8 +102,8 @@ const FALLBACKS = {
     const pct = b.usd_24h_change || 0;
     return { price: b.usd, change: (b.usd * pct) / 100, changePercent: pct, spark: [] };
   },
-  bist100: () => stooqQuote(['^xu100', 'xu100', 'xu100.try']),
-  brent: () => stooqQuote(['brn.f', 'brn']),
+  bist100: () => bistQuote(),
+  brent: () => brentQuote(),
 };
 
 async function stooqQuote(symbols) {
@@ -98,6 +127,26 @@ async function stooqQuote(symbols) {
     } catch { /* sonraki sembol */ }
   }
   throw new Error('stooq yok');
+}
+
+/** Yahoo Finance sayfa gövdesinden fiyat (API crumb reddetse de sayfa açık kalabilir) */
+async function yahooPageQuote(sym) {
+  const txt = await fetchText(`https://finance.yahoo.com/quote/${encodeURIComponent(sym)}/`, 12000);
+  const price = Number((txt.match(/"regularMarketPrice":\{"raw":(-?[0-9.]+)/) || [])[1]);
+  if (!price) throw new Error(`yahoo sayfa yok: ${sym}`);
+  const change = Number((txt.match(/"regularMarketChange":\{"raw":(-?[0-9.]+)/) || [])[1]) || 0;
+  const changePercent = Number((txt.match(/"regularMarketChangePercent":\{"raw":(-?[0-9.]+)/) || [])[1]) || 0;
+  return { price, change, changePercent, spark: [] };
+}
+
+async function bistQuote() {
+  try { return await yahooPageQuote('XU100.IS'); } catch { /* stooq */ }
+  return stooqQuote(['^xu100', 'xu100', 'xu100.try']);
+}
+
+async function brentQuote() {
+  try { return await yahooPageQuote('BZ=F'); } catch { /* stooq */ }
+  return stooqQuote(['brn.f', 'brn']);
 }
 
 export async function getMarket(seedFallback) {
