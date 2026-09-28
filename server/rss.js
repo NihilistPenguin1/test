@@ -76,13 +76,27 @@ function findImage(node) {
 }
 
 function pickLink(item) {
-  if (typeof item.link === 'string') return item.link;
-  for (const l of asArray(item.link)) {
-    const rel = l?.['@_rel'];
-    const href = l?.['@_href'];
-    if (href && (!rel || rel === 'alternate')) return href;
+  // Yapılandırıcı 'link'i diziye çevirir; önce düz metin URL'leri tara.
+  const links = asArray(item.link);
+  for (const l of links) {
+    if (typeof l === 'string' && /^https?:\/\//.test(l.trim())) return l.trim();
   }
-  return item.guid?.['#text'] || item.guid || item.id || '';
+  // Atom: <link rel="alternate" href="..."> / <link href="...">
+  for (const l of links) {
+    const href = l?.['@_href'] || l?.['@_url'] || '';
+    const rel = l?.['@_rel'];
+    if (/^https?:\/\//.test(href) && (!rel || rel === 'alternate')) return href;
+  }
+  for (const l of links) {
+    const href = l?.['@_href'] || l?.['@_url'] || '';
+    if (/^https?:\/\//.test(href)) return href;
+  }
+  // RDF: <item rdf:about="https://...">
+  const about = item['@_rdf:about'] || item['@_about'] || '';
+  if (/^https?:\/\//.test(about)) return about;
+  // guid yalnızca URL ise (Wired çıplak kimlik, F24/DW UUID verir — kullanılamaz)
+  const guid = typeof item.guid === 'string' ? item.guid : (item.guid?.['#text'] || item.id || '');
+  return /^https?:\/\//.test(guid) ? guid : '';
 }
 
 function normalizeItem(item, source, category) {
@@ -90,7 +104,7 @@ function normalizeItem(item, source, category) {
   let link = stripHtml(pickLink(item));
   if (!title || !link) return null;
   // BBC feed link'lerindeki izleme parametrelerini temizle
-  link = link.replace(/\?at_medium=.*$/, '').replace(/#0$/, '');
+  link = link.replace(/\?at_medium=.*$/, '').replace(/#0$/, '').replace(/\?oc=\d+$/, '');
   const rawDate = firstText(item.pubDate) || firstText(item.published) || firstText(item.updated) || firstText(item['dc:date']);
   const published = rawDate ? new Date(rawDate) : new Date();
   const summary = stripHtml(firstText(item.description) || firstText(item.summary) || firstText(item['content:encoded'])).slice(0, 400);
