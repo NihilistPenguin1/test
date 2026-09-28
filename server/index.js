@@ -4,6 +4,25 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SOURCES, CATEGORIES } from './config.js';
 import { getNews, filterNews, getMarketData, getWeatherData, getSeedMeta, getArticleContent } from './store.js';
+import { extractOgImage } from './enrich.js';
+
+// Aynı anda en fazla 6 görsel çözümü (sunucuyu yormamak için)
+let thumbActive = 0;
+const thumbQueue = [];
+function extractOgImageLimited(url) {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      thumbActive++;
+      extractOgImage(url).then(resolve, reject).finally(() => {
+        thumbActive--;
+        const next = thumbQueue.shift();
+        if (next) next();
+      });
+    };
+    if (thumbActive < 6) run();
+    else thumbQueue.push(run);
+  });
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, '..', 'public');
@@ -60,6 +79,20 @@ app.get('/api/news/:id', async (req, res) => {
   const item = items.find((i) => i.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Haber bulunamadı' });
   res.json(item);
+});
+
+// Görsel çözücü: makale URL'si → en iyi kapak görseline 302 yönlendirme
+// (feed'de görsel olmayan haberler buradan görsel alır; kalıcı önbellekli)
+app.get('/api/thumb', async (req, res) => {
+  const u = String(req.query.u || '');
+  if (!/^https?:\/\//.test(u)) return res.redirect(302, '/img/placeholder.svg');
+  try {
+    const img = await extractOgImageLimited(u);
+    res.setHeader('Cache-Control', 'public, max-age=43200');
+    res.redirect(302, img || '/img/placeholder.svg');
+  } catch {
+    res.redirect(302, '/img/placeholder.svg');
+  }
 });
 
 // Tam metin: haberi sitede okumak için

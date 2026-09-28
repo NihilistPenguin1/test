@@ -59,9 +59,9 @@ export async function getNews({ force = false } = {}) {
     live = false;
   }
 
-  // Görseli olmayan haberlere (TechCrunch, Al Jazeera vb.) 4 katmanlı görsel çözümü
+  // Görseli olmayan haberler için hızlı çözüm (kalanlar /api/thumb ile tembel yüklenir)
   try {
-    await enrichImages(items, 60, 10);
+    await enrichImages(items, 12, 6);
   } catch {
     /* sessiz: yer tutucu kullanılır */
   }

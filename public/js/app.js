@@ -71,10 +71,26 @@
   }
 
   function imgTag(item, cls = '') {
-    const src = item.image || placeholderSVG(item.title, item.source);
-    return `<img class="${cls}" src="${esc(src)}" alt="${esc(item.title)}" loading="lazy"
-      onerror="this.onerror=null;this.src='${placeholderSVG(item.title, item.source)}'" />`;
+    const primary = item.image || thumbURL(item.link);
+    return `<img class="${cls}" src="${esc(primary)}" alt="${esc(item.title)}" loading="lazy"
+      data-link="${esc(item.link)}" data-fb="${esc(placeholderSVG(item.title, item.source))}"
+      onerror="window.__imgFail(this)" />`;
   }
+
+  // Görsel zinciri: feed/og görseli → /api/thumb çözümü → markalı yer tutucu
+  function thumbURL(link) {
+    return `/api/thumb?u=${encodeURIComponent(link)}`;
+  }
+  window.__imgFail = (img) => {
+    const src = img.getAttribute('src') || '';
+    const link = img.dataset.link;
+    if (link && !src.startsWith('/api/thumb')) {
+      img.src = thumbURL(link);
+      return;
+    }
+    img.onerror = null;
+    img.src = img.dataset.fb;
+  };
 
   function srcBadge(sourceId) {
     const meta = SOURCE_META[sourceId] || { name: sourceId, color: '#6f6559', domain: '' };
@@ -478,7 +494,8 @@
           $('#modalContent').innerHTML = a.content;
           $('#modalSummary').hidden = true;
           if (a.image) $('#modalMedia').innerHTML = `<img src="${esc(a.image)}" alt="${esc(a.title)}"
-            onerror="this.onerror=null;this.src='${placeholderSVG(item.title, item.source)}'" />`;
+            data-link="${esc(item.link)}" data-fb="${esc(placeholderSVG(item.title, item.source))}"
+            onerror="window.__imgFail(this)" />`;
           $('#modalReadTime').textContent = `· ~${a.readingMinutes} dk okuma`;
           $('#modalAuthor').textContent = `Kaynak: ${meta.name || item.source}${a.author ? ' · ' + a.author : ''}`;
           if (a.resolvedUrl && !a.resolvedUrl.includes('news.google.com')) $('#modalLink').href = a.resolvedUrl;
