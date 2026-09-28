@@ -3,7 +3,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SOURCES, CATEGORIES } from './config.js';
-import { getNews, filterNews, getMarketData, getWeatherData, getSeedMeta } from './store.js';
+import { getNews, filterNews, getMarketData, getWeatherData, getSeedMeta, getArticleContent } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(__dirname, '..', 'public');
@@ -53,6 +53,29 @@ app.get('/api/news/:id', async (req, res) => {
   const item = items.find((i) => i.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Haber bulunamadı' });
   res.json(item);
+});
+
+// Tam metin: haberi sitede okumak için
+app.get('/api/news/:id/full', async (req, res) => {
+  try {
+    const result = await getArticleContent(req.params.id);
+    if (!result) return res.status(404).json({ error: 'Haber bulunamadı' });
+    res.json({
+      item: result.item,
+      article: result.article,
+      live: true,
+    });
+  } catch (e) {
+    // İçerik çekilemezse özetle devam edilir
+    try {
+      const { items } = await getNews();
+      const item = items.find((i) => i.id === req.params.id);
+      if (!item) return res.status(404).json({ error: 'Haber bulunamadı' });
+      res.json({ item, article: null, live: false, error: e.message });
+    } catch {
+      res.status(500).json({ error: e.message });
+    }
+  }
 });
 
 app.get('/api/market', async (_req, res) => {

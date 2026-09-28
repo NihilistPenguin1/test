@@ -6,6 +6,7 @@ import { SOURCES, CACHE_TTL_MS } from './config.js';
 import { fetchFeed } from './rss.js';
 import { getMarket, seedMarketFromJson } from './market.js';
 import { getWeather, seedWeatherFromJson } from './weather.js';
+import { enrichImages, fetchArticle } from './enrich.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SEED_PATH = path.join(__dirname, '..', 'data', 'seed.json');
@@ -57,8 +58,23 @@ export async function getNews({ force = false } = {}) {
     items = seed.articles;
     live = false;
   }
+
+  // Görseli olmayan haberlere (TechCrunch, Al Jazeera vb.) makale sayfasından og:image çek
+  try {
+    await enrichImages(items, 16, 8);
+  } catch {
+    /* sessiz: yer tutucu kullanılır */
+  }
+
   newsCache = { at: now, items, live, errors };
   return { items, live, errors, fetchedAt: new Date(now).toISOString() };
+}
+
+export async function getArticleContent(id) {
+  const { items } = await getNews();
+  const item = items.find((i) => i.id === id) || seed.articles.find((i) => i.id === id);
+  if (!item) return null;
+  return { item, article: await fetchArticle(item) };
 }
 
 export function filterNews(items, { category, source, q, limit = 24, offset = 0 }) {

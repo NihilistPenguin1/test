@@ -272,7 +272,7 @@
     const [lead, ...rest] = items;
     if (!lead) return;
     $('#heroLead').innerHTML = `
-      <a class="lead-card" href="${esc(lead.link)}" target="_blank" rel="noopener noreferrer">
+      <a class="lead-card" href="${esc(lead.link)}" data-id="${lead.id}" target="_blank" rel="noopener noreferrer">
         <div class="lead-media">${imgTag(lead)}</div>
         <div class="lead-body">
           <div class="meta-row">${catTag(lead.category)} ${srcBadge(lead.source)} <time title="${fullTime(lead.published)}">${relTime(lead.published)}</time></div>
@@ -282,7 +282,7 @@
       </a>`;
 
     $('#heroSide').innerHTML = rest.slice(0, 3).map((item) => `
-      <a class="side-card" href="${esc(item.link)}" target="_blank" rel="noopener noreferrer">
+      <a class="side-card" href="${esc(item.link)}" data-id="${item.id}" target="_blank" rel="noopener noreferrer">
         <div class="side-media">${imgTag(item)}</div>
         <div>
           <div class="meta-row">${srcBadge(item.source)} <time title="${fullTime(item.published)}">${relTime(item.published)}</time></div>
@@ -302,7 +302,7 @@
 
   function renderBreaking(items) {
     const top = items.slice(0, 10);
-    const html = top.map((i) => `<a href="${esc(i.link)}" target="_blank" rel="noopener">${esc(i.title)}</a>`).join('<span style="opacity:.35">◆</span>');
+    const html = top.map((i) => `<a href="${esc(i.link)}" data-id="${i.id}" target="_blank" rel="noopener">${esc(i.title)}</a>`).join('<span style="opacity:.35">◆</span>');
     $('#breakingTrack').innerHTML = html + `<span style="opacity:.35">◆</span>` + html; // marquee döngüsü
   }
 
@@ -353,11 +353,52 @@
     $('#modalSource').innerHTML = `${srcBadge(item.source)} ${catTag(item.category)}`;
     $('#modalTime').textContent = fullTime(item.published);
     $('#modalTitle').textContent = item.title;
-    $('#modalSummary').textContent = item.summary || 'Özet bulunmuyor. Devamı için kaynak yayının orijinal makalesini açabilirsiniz.';
-    $('#modalAuthor').textContent = item.author ? `Kaynak: ${meta.name || item.source} · ${item.author}` : `Kaynak: ${meta.name || item.source}`;
+    $('#modalSummary').textContent = item.summary || '';
+    $('#modalSummary').hidden = !item.summary;
+    $('#modalContent').innerHTML = '';
+    $('#modalAuthor').textContent = `Kaynak: ${meta.name || item.source}${item.author ? ' · ' + item.author : ''}`;
+    $('#modalReadTime').textContent = '';
     $('#modalLink').href = item.link;
     $('#articleModal').hidden = false;
     document.body.style.overflow = 'hidden';
+
+    // Tam metni getir (haberi sitede oku)
+    const loading = $('#modalLoading');
+    loading.hidden = false;
+    fetch(`/api/news/${item.id}/full`)
+      .then((r) => {
+        if (!r.ok) throw new Error('content unavailable');
+        return r.json();
+      })
+      .then((data) => {
+        if ($('#articleModal').hidden) return; // modal kapanmışsa atla
+        loading.hidden = true;
+        const a = data.article;
+        if (a && a.content) {
+          $('#modalContent').innerHTML = a.content;
+          $('#modalSummary').hidden = true;
+          if (a.image) $('#modalMedia').innerHTML = `<img src="${esc(a.image)}" alt="${esc(a.title)}"
+            onerror="this.onerror=null;this.src='${placeholderSVG(item.title, item.source)}'" />`;
+          $('#modalReadTime').textContent = `· ~${a.readingMinutes} dk okuma`;
+          $('#modalAuthor').textContent = `Kaynak: ${meta.name || item.source}${a.author ? ' · ' + a.author : ''}${item.author && a.author !== item.author ? ' · ' + item.author : ''}`;
+          // Gerçek makale linki (Google News yönlendirmesi çözülmüş olabilir)
+          if (a.resolvedUrl && !a.resolvedUrl.includes('news.google.com')) $('#modalLink').href = a.resolvedUrl;
+        } else {
+          loading.hidden = true;
+          $('#modalSummary').hidden = false;
+          if (!$('#modalSummary').textContent) {
+            $('#modalSummary').textContent = 'Bu haber için tam metin getirilemedi. Devamını kaynak yayının sayfasında okuyabilirsiniz.';
+          }
+        }
+      })
+      .catch(() => {
+        if ($('#articleModal').hidden) return;
+        loading.hidden = true;
+        $('#modalSummary').hidden = false;
+        if (!$('#modalSummary').textContent) {
+          $('#modalSummary').textContent = 'Bu haber için tam metin getirilemedi. Devamını kaynak yayının sayfasında okuyabilirsiniz.';
+        }
+      });
   }
   function closeModal() {
     $('#articleModal').hidden = true;
@@ -379,6 +420,14 @@
   /* ---------- Olaylar ---------- */
   function initEvents() {
     document.addEventListener('click', (e) => {
+      // Manşet / yan kart / son dakika: normal tık sitede okuma görünümünü açar
+      // (Ctrl/Cmd+tık ve orta tık orijinal haberi yeni sekmede açar)
+      const heroLink = e.target.closest('.lead-card[data-id], .side-card[data-id], .breaking-track a[data-id]');
+      if (heroLink && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+        e.preventDefault();
+        openModal(heroLink.dataset.id);
+        return;
+      }
       const card = e.target.closest('.news-card, .latest-item, .trend-item');
       if (card && card.dataset.id) { openModal(card.dataset.id); return; }
       if (e.target.closest('[data-close]')) { closeModal(); return; }

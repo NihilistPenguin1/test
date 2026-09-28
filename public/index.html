@@ -173,12 +173,18 @@
         <div class="modal-kicker">
           <span class="src-badge" id="modalSource"></span>
           <time id="modalTime"></time>
+          <span class="modal-readtime" id="modalReadTime"></span>
         </div>
         <h2 id="modalTitle"></h2>
         <p class="modal-summary" id="modalSummary"></p>
+        <div class="article-loading" id="modalLoading" hidden>
+          <div class="spinner"></div>
+          <span>Haberin tam metni getiriliyor…</span>
+        </div>
+        <div class="article-content" id="modalContent"></div>
         <p class="modal-author" id="modalAuthor"></p>
         <a class="btn-primary" id="modalLink" href="#" target="_blank" rel="noopener noreferrer">
-          Haberin kaynağına git
+          Kaynağın sitesinde oku
           <svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 17L17 7M9 7h8v8" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </a>
       </div>
