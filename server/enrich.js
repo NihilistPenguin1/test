@@ -16,6 +16,8 @@ import { fetchText } from './rss.js';
 
 const JINA_PREFIX = 'https://r.jina.ai/';
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 const ogCache = new Map();        // orijinal link -> görsel URL (kalıcı)
 const googleUrlCache = new Map(); // google news link -> gerçek makale URL
 const articleCache = new Map();   // id -> { at, data }
@@ -61,11 +63,23 @@ async function fetchJina(url, timeoutMs = 15000) {
    ============================================================ */
 const isGoogleHost = (h) => /(?:^|\.)(google|gstatic|googleusercontent|ggpht|youtube|blogger|blogspot)\./i.test(h);
 
+function unescapeUrl(u) {
+  return String(u)
+    .replace(/\\u003d/g, '=').replace(/\\u0026/g, '&').replace(/\\u002f/g, '/')
+    .replace(/\\u0025/g, '%').replace(/\\\//g, '/').replace(/&amp;/g, '&');
+}
+
+/** Google News makale kimliği (CBMi… / AU_yqL… / CEni…) */
+function googleArticleId(url) {
+  const m = String(url || '').match(/news\.google\.com\/(?:rss\/)?articles\/([A-Za-z0-9_-]{10,})/);
+  return m ? m[1] : null;
+}
+
 function findRedirectTarget(html) {
   const candidates = [];
   const push = (u) => {
     try {
-      const abs = u.replace(/\\u0026/g, '&').replace(/\\\//g, '/');
+      const abs = unescapeUrl(u);
       const parsed = new URL(abs);
       if (/^https?:$/.test(parsed.protocol) && !isGoogleHost(parsed.hostname)) {
         // varlık dosyalarını ele (js/css/png...)
@@ -87,15 +101,199 @@ function findRedirectTarget(html) {
   return candidates[0] || '';
 }
 
+const decodeParamsCache = new Map(); // article id -> {direct|sig+ts}
+
+/**
+ * Google News makale sayfasından imza (data-n-a-sg) + zaman damgası (data-n-a-ts)
+ * çıkarır. Bu ikili, batchexecute RPC ile gerçek URL'yi almak için gereklidir.
+ */
+async function getDecodeParams(id) {
+  if (decodeParamsCache.has(id)) return decodeParamsCache.get(id);
+  let out = { id };
+  for (const u of [
+    `https://news.google.com/articles/${id}?hl=en-US&gl=US&ceid=US:en`,
+    `https://news.google.com/rss/articles/${id}?hl=en-US&gl=US&ceid=US:en`,
+  ]) {
+    try {
+      const { html } = await fetchHtml(u, 12000);
+      const direct = findRedirectTarget(html);
+      if (direct && !direct.includes('news.google.com')) {
+        out = { id, direct };
+        break;
+      }
+      const sg = (html.match(/data-n-a-sg=["']([^"']+)["']/) || [])[1];
+      const ts = (html.match(/data-n-a-ts=["']([^"']+)["']/) || [])[1];
+      if (sg && ts) {
+        out = { id, sig: sg, ts };
+        break;
+      }
+    } catch { /* sonraki */ }
+  }
+  decodeParamsCache.set(id, out);
+  return out;
+}
+
+/** batchexecute yanıtından gerçek URL'leri ayıklar (çeşitli zarflara dayanıklı) */
+export function parseBatchResponse(text) {
+  const urls = [];
+  const push = (u) => {
+    const clean = unescapeUrl(u);
+    if (/^https?:/.test(clean) && !/news\.google\.com/.test(clean)) urls.push(clean);
+  };
+  for (const part of String(text || '').split('\n\n')) {
+    const body = part.replace(/^\)\]\}'/, '').trim();
+    if (!body.startsWith('[')) continue;
+    try {
+      const arr = JSON.parse(body);
+      for (const row of arr) {
+        if (!Array.isArray(row) || typeof row[2] !== 'string') continue;
+        try {
+          const inner = JSON.parse(row[2]);
+          if (Array.isArray(inner) && typeof inner[1] === 'string' && /^https?:/.test(inner[1])) push(inner[1]);
+        } catch {
+          const m = row[2].match(/garturlres\\",\\"(https?:[^\\"]+)/);
+          if (m) push(m[1]);
+        }
+      }
+    } catch { /* düz metin taramasına düş */ }
+  }
+  if (!urls.length) {
+    const re = /garturlres\\",\\"(https?:[^\\"]+)/g;
+    let m;
+    while ((m = re.exec(String(text)))) push(m[1]);
+  }
+  if (!urls.length) {
+    const re2 = /"garturlres","(https?:[^"]+)"/g;
+    let m;
+    while ((m = re2.exec(String(text)))) push(m[1]);
+  }
+  return urls;
+}
+
+/**
+ * Toplu Google News çözümü — tek POST'ta çok sayıda linki çözer.
+ * Yöntem: makale sayfasından imza/zaman damgası → news.google.com/_/DotsSplashUi/data/batchexecute
+ * (googlenewsdecoder / google-news-url-decoder paketleriyle aynı RPC: Fbv4je + garturlreq)
+ */
+export async function resolveGoogleBatch(urls) {
+  const out = new Map(); // orijinal -> gerçek
+  const pending = [];
+  for (const url of urls) {
+    const id = googleArticleId(url);
+    if (!id) continue;
+    const cached = googleUrlCache.get(url) || googleUrlCache.get(id);
+    if (cached && !cached.includes('news.google.com')) {
+      out.set(url, cached);
+      continue;
+    }
+    if (!pending.some((p) => p.id === id)) pending.push({ url, id });
+    else pending.push({ url, id: pending.find((p) => p.id === id).id });
+  }
+  if (!pending.length) return out;
+
+  // 1) İmza + zaman damgaları (hafif GET'ler; aralarında kısa bekleme)
+  const params = [];
+  for (const p of pending) {
+    const pr = await getDecodeParams(p.id);
+    params.push({ ...p, ...pr });
+    await sleep(120);
+  }
+
+  // 2) Doğrudan dönenleri yaz; imzalıları tek POST'a koy
+  const needBatch = [];
+  for (const p of params) {
+    if (p.direct) {
+      googleUrlCache.set(p.url, p.direct);
+      googleUrlCache.set(p.id, p.direct);
+      out.set(p.url, p.direct);
+    } else if (p.sig && p.ts && !needBatch.some((x) => x.id === p.id)) {
+      needBatch.push(p);
+    }
+  }
+
+  const postBatch = async (rows) => {
+    const body = new URLSearchParams({ 'f.req': JSON.stringify([rows]) });
+    const res = await fetch('https://news.google.com/_/DotsSplashUi/data/batchexecute?rpcids=Fbv4je', {
+      method: 'POST',
+      headers: {
+        'User-Agent': USER_AGENT,
+        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+        Referer: 'https://news.google.com/',
+        Accept: '*/*',
+      },
+      body,
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) throw new Error(`batchexecute HTTP ${res.status}`);
+    return parseBatchResponse(await res.text());
+  };
+
+  if (needBatch.length) {
+    // İmzalı zarf (2024→2026 yaygın yöntem)
+    const sigRows = needBatch.map((p) => [
+      'Fbv4je',
+      `["garturlreq",[["X","X",["X","X"],null,null,1,1,"US:en",null,1,null,null,null,null,null,0,1],"X","X",1,[1,1,1],1,1,null,0,0,null,0],"${p.id}",${Number(p.ts)},"${p.sig}"]`,
+      null,
+      'generic',
+    ]);
+    try {
+      const decoded = await postBatch(sigRows);
+      needBatch.forEach((p, i) => {
+        const real = decoded[i];
+        if (real) {
+          googleUrlCache.set(p.url, real);
+          googleUrlCache.set(p.id, real);
+          out.set(p.url, real);
+        }
+      });
+    } catch { /* imzasız zarfa düş */ }
+    await sleep(250);
+  }
+
+  // 3) Hâlâ çözülmemişlere imzasız zarf (eski yöntem)
+  const still = params.filter((p) => !out.has(p.url) && !p.direct);
+  const uniqStill = still.filter((p, i) => still.findIndex((x) => x.id === p.id) === i);
+  if (uniqStill.length) {
+    const nosigRows = uniqStill.map((p) => [
+      'Fbv4je',
+      `["garturlreq",[["en-US","US",["FINANCE_TOP_INDICES","WEB_TEST_1_0_0"],null,null,1,1,"US:en",null,180,null,null,null,null,null,0,null,null,[1608992183,723341000]],"en-US","US",1,[2,3,4,8],1,0,"655000234",0,0,null,0],"${p.id}"]`,
+      null,
+      'generic',
+    ]);
+    try {
+      const decoded = await postBatch(nosigRows);
+      uniqStill.forEach((p, i) => {
+        const real = decoded[i];
+        if (real) {
+          googleUrlCache.set(p.url, real);
+          googleUrlCache.set(p.id, real);
+          out.set(p.url, real);
+        }
+      });
+    } catch { /* jina katmanı dener */ }
+  }
+
+  // Eşlemediyse bile orijinal URL'yi sonuçta göster (tekrar tekrar denemesin)
+  for (const p of params) {
+    if (!out.has(p.url)) out.set(p.url, googleUrlCache.get(p.url) || p.url);
+  }
+  return out;
+}
+
+/** Google News linkini gerçek makale URL'sine çevirir (bulamazsa girdiği URL'yi döner) */
 export async function resolveArticleUrl(url) {
-  if (!url.includes('news.google.com')) return url;
-  if (googleUrlCache.has(url)) return googleUrlCache.get(url);
+  if (!url || !googleArticleId(url)) return url;
+  const cached = googleUrlCache.get(url);
+  if (cached) return cached;
   try {
-    const { html } = await fetchHtml(url, 10000);
-    const target = findRedirectTarget(html);
-    if (target) {
-      googleUrlCache.set(url, target);
-      return target;
+    const map = await resolveGoogleBatch([url]);
+    if (map.get(url)) return map.get(url);
+    // Son çare: jina JS ile yönlendirmeyi takip eder ve sayfayı render eder
+    const md = await fetchJina(url, 18000);
+    const m = md.match(/^URL Source:\s*(https?:\/\/\S+)/m);
+    if (m && m[1] && !m[1].includes('news.google.com')) {
+      googleUrlCache.set(url, m[1]);
+      return m[1];
     }
   } catch { /* sessiz */ }
   return url;
@@ -186,11 +384,38 @@ async function oembedImage(realUrl) {
   }
 }
 
+function scoreImageUrl(u) {
+  const l = String(u).toLowerCase();
+  if (!/^https?:/.test(l)) return -1;
+  if (BAD_IMG.test(l) && !GOOD_IMG.test(l)) return -1;
+  if (/googleusercontent|gstatic|google\.com\/(images|branding)|news\.google\.com|blogger\.com|blogspot\./.test(l)) return -1;
+  if (/\.svg(\?|$)/.test(l)) return -1;
+  let s = 0;
+  if (GOOD_IMG.test(l)) s += 3;
+  if (/resizer|wp-content\/uploads|ichef|static01|static\.nytimes|cloudfront|akamaized|\/master\/|\/original\//.test(l)) s += 2;
+  if (/\.(jpe?g|png|webp)(\?|$)/.test(l)) s += 1;
+  if (/logo|icon|avatar|sprite|favicon|badge|author|profile|byline|headshot|newsletter/.test(l)) s -= 5;
+  if (/width=1[0-9]{2,}|[/_][5-9][0-9]{2}x[0-9]|w=1[0-9]{3}|\/[1-9][0-9]{3}\//.test(l)) s += 2;
+  return s;
+}
+
 function firstMarkdownImage(md) {
+  let best = '';
+  let bestScore = 0;
+  const seen = new Set();
   for (const m of md.matchAll(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/g)) {
-    if (!BAD_IMG.test(m[1])) return m[1];
+    const u = m[1];
+    if (seen.has(u)) continue;
+    seen.add(u);
+    const s = scoreImageUrl(u);
+    if (s > bestScore) {
+      bestScore = s;
+      best = u;
+    }
+    // ilk makul görsel + daha iyisi çıkmazsa onu döndür
+    if (!best && s >= 2) best = u;
   }
-  return '';
+  return best || '';
 }
 
 /* ---------- Ekran görüntüsü servisleri (son çare) ---------- */
@@ -254,6 +479,20 @@ async function mapLimit(arr, limit, fn) {
 export async function enrichImages(items, max = 24, concurrency = 8) {
   const targets = items.filter((it) => !it.image && it.link).slice(0, max);
   if (!targets.length) return items;
+
+  // Google News linklerini TEK batchexecute çağrısıyla toplu çöz
+  // (Reuters/AP vb. için görselin anahtarı: gerçek makale URL'si)
+  try {
+    const googleItems = targets.filter((it) => googleArticleId(it.link));
+    if (googleItems.length) {
+      const map = await resolveGoogleBatch(googleItems.map((it) => it.link));
+      for (const it of googleItems) {
+        const real = map.get(it.link);
+        if (real && !real.includes('news.google.com')) it.link = real;
+      }
+    }
+  } catch { /* bireysel katmanlar dener */ }
+
   await mapLimit(targets, concurrency, async (it) => {
     const img = await extractOgImage(it.link);
     if (img) it.image = img;
