@@ -59,7 +59,7 @@ async function fetchJina(url, timeoutMs = 15000) {
 /* ============================================================
    1) Google News yönlendirme çözümü
    ============================================================ */
-const isGoogleHost = (h) => /(?:^|\.)(google|gstatic|googleusercontent|ggpht|youtube|blogger|blogspot)\./i.test(h);
+const isGoogleHost = (h) => /(?:^|\.)(google|googleapis|gstatic|googleusercontent|ggpht|youtube|ytimg|blogger|blogspot)\./i.test(h);
 
 function unescapeUrl(u) {
   return String(u)
@@ -79,22 +79,25 @@ function findRedirectTarget(html) {
     try {
       const abs = unescapeUrl(u);
       const parsed = new URL(abs);
-      if (/^https?:$/.test(parsed.protocol) && !isGoogleHost(parsed.hostname)) {
-        // varlık dosyalarını ele (js/css/png...)
-        if (!/\.(js|css|png|jpe?g|gif|svg|ico|woff2?)(\?|$)/i.test(parsed.pathname)) {
-          candidates.push(abs);
-        }
-      }
+      if (!/^https?:$/.test(parsed.protocol)) return;
+      if (isGoogleHost(parsed.hostname)) return; // fonts.googleapis.com dahil
+      // makale olmayan kaynakları ele (css/js/görsel/font/servis uçları)
+      if (/\.(js|css|png|jpe?g|gif|svg|ico|woff2?|json|xml)(\?|$)/i.test(parsed.pathname)) return;
+      if (/family=|stylesheet|favicon/i.test(abs)) return;
+      if (/\/(css|fonts|static|assets|images?|img|wp-includes)\//i.test(parsed.pathname)) return;
+      if (parsed.pathname.length < 2) return;
+      candidates.push(abs);
     } catch { /* geçersiz */ }
   };
-  // data-n-au özniteliği (Google News yönlendirme sayfası)
+  // data-n-au özniteliği (en güvenilir: Google News yönlendirme hedefi)
   for (const m of html.matchAll(/data-n-au=["']([^"']+)["']/g)) push(m[1]);
   // rel="noreferrer" bağlantıları
   for (const m of html.matchAll(/<a[^>]+href=["'](https?:\/\/[^"']+)["'][^>]*rel=["']noreferrer["']/gi)) push(m[1]);
   for (const m of html.matchAll(/<a[^>]+rel=["']noreferrer["'][^>]*href=["'](https?:\/\/[^"']+)["']/gi)) push(m[1]);
-  // JS dizesi içindeki URL (window.location.replace vs.)
-  for (const m of html.matchAll(/["'](https?:\/\/[^"'\s]+?)["']/g)) push(m[1]);
-  // en uzun/yazımsal görünen aday (makale URL'si genelde en uzunudur)
+  // JS yönlendirmesi: window.location.replace('https://...')
+  const loc = html.match(/location(?:\.href|\.replace)?\s*[=(]\s*["'](https?:\/\/[^"']+)["']/);
+  if (loc) push(loc[1]);
+  // en uzun makale-URL'si adayı
   candidates.sort((a, b) => b.length - a.length);
   return candidates[0] || '';
 }
