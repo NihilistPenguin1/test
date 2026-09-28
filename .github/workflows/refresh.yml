@@ -1,11 +1,17 @@
 name: Gece Haber Yenile
 
 # Her gece Türkiye saatiyle 00:00'da (UTC+3 → 21:00 UTC) haberleri tazeleyip
-# statik siteyi GitHub Pages'e yayar. Actions sekmesinden elle de çalıştırılabilir.
+# statik siteyi GitHub Pages'e yayar. Dal itişinde ve Actions sekmesinden elle de
+# çalıştırılabilir. (Zamanlanmış tetikler yalnızca varsayılandan çalışır; push
+# tetikleyicisi bu dal için de canlı yayın sağlar.)
 on:
   schedule:
     - cron: '0 21 * * *'
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - arena/01a0e8f9-test
 
 permissions:
   contents: read
@@ -25,7 +31,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Bağımlılıklar

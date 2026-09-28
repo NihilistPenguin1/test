@@ -27,6 +27,14 @@ function mapLimit(arr, limit, fn) {
 
 const fullName = (id) => `${encodeURIComponent(id)}.json`;
 
+function note(msg) {
+  console.log(msg);
+  // GitHub Actions annotation'ı — log erişimi olmasa da API'den okunur
+  if (process.env.GITHUB_ACTIONS) {
+    console.log(`::notice title=TELGRAF derleme::${String(msg).replace(/%/g, '%25').replace(/\r?\n/g, '%0A')}`);
+  }
+}
+
 async function main() {
   const t0 = Date.now();
   console.log('▶ TELGRAF statik derleme başladı');
@@ -36,7 +44,7 @@ async function main() {
   // Haberler (31 feed, canlı + seed karışımı)
   const news = await getNews({ force: true });
   const items = news.items;
-  console.log(`  haber: ${items.length} (live=${news.live}, hata=${news.errors?.length || 0})`);
+  note(`haber: ${items.length} (live=${news.live}, hata=${news.errors?.length || 0})`);
 
   // Google News linklerini TOPLU çöz (Reuters/AP vb. gerçek makale URL'sine)
   try {
@@ -61,7 +69,7 @@ async function main() {
     console.log(`  görsel zenginleştirme hatası: ${e.message}`);
   }
   const withImg = items.filter((i) => i.image).length;
-  console.log(`  kapak görseli: ${withImg}/${items.length}`);
+  note(`kapak görseli: ${withImg}/${items.length}`);
 
   // Tam metinler (modal'da sitede okuma) — paralel, habere özel dayanıklılık
   let fullOk = 0;
@@ -77,14 +85,14 @@ async function main() {
       console.log(`  tam metin yok (${it.id}): ${String(e.message).slice(0, 80)}`);
     }
   });
-  console.log(`  tam metin: ${fullOk}/${items.length}`);
+  note(`tam metin: ${fullOk}/${items.length}`);
 
   // Piyasa + hava (sunucu tarafında çekim — tarayıcı CORS sorunu yok)
   const [market, weather] = await Promise.all([
     getMarketData().catch((e) => ({ items: [], live: false, error: e.message })),
     getWeatherData().catch((e) => ({ live: false, error: e.message })),
   ]);
-  console.log(`  piyasa: ${market.items?.length || 0} kalem (live=${market.live}) · hava (live=${weather.live})`);
+  note(`piyasa: ${market.items?.length || 0} kalem (live=${market.live}) · hava (live=${weather.live})`);
 
   /* ---------- 2) dist/ ağacını kur (tek seferde) ---------- */
 
@@ -125,5 +133,10 @@ async function main() {
 
 main().catch((e) => {
   console.error('✖ derleme hatası:', e);
+  if (process.env.GITHUB_ACTIONS) {
+    const msg = String(e?.stack || e).split('\n').slice(0, 4).join(' | ')
+      .replace(/%/g, '%25').replace(/\r?\n/g, '%0A');
+    console.log(`::error title=TELGRAF derleme hatası::${msg}`);
+  }
   process.exit(1);
 });
