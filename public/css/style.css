@@ -1,5 +1,5 @@
 /* ============================================================
-   PUSULA HABER — Editorial news design
+   PUSULA HABER — Editorial news design (tam genişlik)
    ============================================================ */
 :root {
   --bg: #faf7f2;
@@ -48,7 +48,14 @@ body {
 img { display: block; max-width: 100%; }
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; }
-.container { max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+
+/* TAM GENİŞLİK: ekranın tamamını kullanır, ortada sütun yok */
+.container {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 0 clamp(16px, 2.8vw, 56px);
+}
 
 /* ---------- Piyasa şeridi (ticker) ---------- */
 .ticker-bar {
@@ -268,7 +275,7 @@ html[data-theme="dark"] .icon-moon { display: none; }
 .lead-body { padding: 18px 4px 0; }
 .lead-title {
   font-family: var(--serif);
-  font-size: clamp(24px, 2.6vw, 36px);
+  font-size: clamp(24px, 2.6vw, 46px);
   line-height: 1.16;
   margin: 10px 0 12px;
   font-weight: 800;
@@ -279,6 +286,7 @@ html[data-theme="dark"] .icon-moon { display: none; }
   color: var(--muted);
   font-size: 15px;
   margin: 0 0 14px;
+  max-width: 62ch;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -286,7 +294,7 @@ html[data-theme="dark"] .icon-moon { display: none; }
 }
 
 .hero-side { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
-.side-card { display: grid; grid-template-columns: 118px 1fr; gap: 14px; align-items: start; }
+.side-card { display: grid; grid-template-columns: minmax(100px, 150px) 1fr; gap: 14px; align-items: start; }
 .side-media {
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -321,7 +329,7 @@ html[data-theme="dark"] .icon-moon { display: none; }
   color: var(--ink);
 }
 .panel-accent { width: 22px; height: 3px; background: var(--accent); border-radius: 2px; }
-.latest-list { list-style: none; margin: 0; padding: 0; counter-reset: latest; }
+.latest-list { list-style: none; margin: 0; padding: 0; }
 .latest-item {
   display: grid;
   grid-template-columns: 30px 1fr;
@@ -426,7 +434,7 @@ html[data-theme="dark"] .icon-moon { display: none; }
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 26px 24px;
 }
 .news-card {
@@ -559,7 +567,7 @@ html[data-theme="dark"] .icon-moon { display: none; }
 .market-chg.down { color: var(--down); background: color-mix(in srgb, var(--down) 12%, transparent); }
 
 /* Trend */
-.trend-list { list-style: none; margin: 0; padding: 0; counter-reset: trend; }
+.trend-list { list-style: none; margin: 0; padding: 0; }
 .trend-item {
   display: grid;
   grid-template-columns: 28px 1fr;
@@ -605,7 +613,7 @@ html[data-theme="dark"] .icon-moon { display: none; }
   position: relative;
   background: var(--surface);
   border-radius: 18px;
-  max-width: 720px;
+  max-width: 780px;
   width: 100%;
   max-height: calc(100vh - 48px);
   overflow-y: auto;
@@ -623,12 +631,12 @@ html[data-theme="dark"] .icon-moon { display: none; }
 .modal-kicker { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .modal-body h2 {
   font-family: var(--serif);
-  font-size: clamp(22px, 3vw, 30px);
+  font-size: clamp(22px, 3vw, 32px);
   line-height: 1.22;
   margin: 0 0 14px;
 }
 .modal-summary { color: var(--muted); font-size: 15.5px; line-height: 1.65; margin: 0 0 10px; }
-.modal-author { font-size: 12.5px; color: var(--muted); font-style: italic; margin: 0 0 22px; }
+.modal-author { font-size: 12.5px; color: var(--muted); font-style: italic; margin: 22px 0 22px; }
 .modal-readtime { color: var(--muted); }
 
 /* Tam metin okuma görünümü */
@@ -705,10 +713,11 @@ html[data-theme="dark"] .icon-moon { display: none; }
 html[data-theme="dark"] .site-footer { background: #0c0a08; }
 .footer-grid {
   display: grid;
-  grid-template-columns: 1.6fr 1fr 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 40px;
-  padding: 52px 24px 36px;
+  padding: 52px clamp(16px, 2.8vw, 56px) 36px;
 }
+.footer-brand { grid-column: span 2; }
 .footer-brand p { font-size: 13px; line-height: 1.7; color: #a3968a; max-width: 380px; }
 .footer-logo { color: #f5efe6; margin-bottom: 16px; }
 .site-footer h4 {
@@ -762,7 +771,7 @@ html[data-theme="dark"] .site-footer { background: #0c0a08; }
   .hero { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
   .hero-latest { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); padding: 22px 0 0; }
   .latest-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0 26px; }
-  .feed-layout { grid-template-columns: minmax(0, 1fr) 290px; gap: 28px; }
+  .feed-layout { grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; }
 }
 @media (max-width: 900px) {
   .masthead-row { grid-template-columns: auto 1fr auto; }
@@ -774,17 +783,15 @@ html[data-theme="dark"] .site-footer { background: #0c0a08; }
   .hero { grid-template-columns: 1fr; }
   .feed-layout { grid-template-columns: 1fr; }
   .feed-aside { display: grid; grid-template-columns: repeat(2, 1fr); }
-  .footer-grid { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 640px) {
   .container { padding: 0 16px; }
-  .card-grid { grid-template-columns: 1fr; }
   .latest-list { grid-template-columns: 1fr; }
   .feed-aside { grid-template-columns: 1fr; }
-  .footer-grid { grid-template-columns: 1fr; gap: 28px; }
   .lead-title { font-size: 23px; }
   .brand-name { font-size: 24px; }
   .modal-body { padding: 20px 18px 26px; }
+  .footer-brand { grid-column: span 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -12,7 +12,14 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.disable('x-powered-by');
-app.use(express.static(PUBLIC, { maxAge: '5m', etag: true }));
+// Statik dosyalar: kısa önbellek + HTML için no-cache (eski CSS/JS takılmasın)
+app.use(express.static(PUBLIC, {
+  maxAge: '60s',
+  etag: true,
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+  },
+}));
 
 // ---- API ----
 
@@ -96,8 +103,11 @@ app.get('/api/weather', async (_req, res) => {
 
 app.get('/api/seed-meta', (_req, res) => res.json(getSeedMeta()));
 
-// SPA giriş noktası
-app.get('*', (_req, res) => res.sendFile(path.join(PUBLIC, 'index.html')));
+// SPA giriş noktası (asla önbelleklenmez)
+app.get('*', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.sendFile(path.join(PUBLIC, 'index.html'));
+});
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Pusula Haber http://0.0.0.0:${PORT} üzerinde çalışıyor`);

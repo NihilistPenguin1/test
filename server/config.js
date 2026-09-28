@@ -1,5 +1,6 @@
 // Pusula Haber — kaynak tanımları
-// Her kaynak bir veya birden fazla RSS/Atom feed'i besleyebilir.
+// Her kaynak birden fazla RSS/Atom beslemesi besleyebilir (bölüm feed'leriyle
+// ana sayfa kapsamına yakın hacim elde edilir).
 // Reuters ve AP resmi RSS'i kapattığı için Google News adaptörü kullanılıyor.
 
 export const CATEGORIES = {
@@ -24,7 +25,13 @@ export const SOURCES = [
     domain: 'techcrunch.com',
     home: 'https://techcrunch.com/',
     color: '#0a8f3c',
-    feeds: [{ url: 'https://techcrunch.com/feed/', category: 'tech' }],
+    feeds: [
+      { url: 'https://techcrunch.com/feed/', category: 'tech' },
+      { url: 'https://techcrunch.com/category/artificial-intelligence/feed/', category: 'tech' },
+      { url: 'https://techcrunch.com/category/startups/feed/', category: 'tech' },
+      { url: 'https://techcrunch.com/category/gadgets/feed/', category: 'tech' },
+      { url: 'https://techcrunch.com/category/apps/feed/', category: 'tech' },
+    ],
   },
   {
     id: 'wired',
@@ -33,7 +40,13 @@ export const SOURCES = [
     domain: 'wired.com',
     home: 'https://www.wired.com/',
     color: '#111111',
-    feeds: [{ url: 'https://www.wired.com/feed/rss', category: 'tech' }],
+    feeds: [
+      { url: 'https://www.wired.com/feed/rss', category: 'tech' },
+      { url: 'https://www.wired.com/feed/category/business/latest/rss', category: 'tech' },
+      { url: 'https://www.wired.com/feed/category/gear/latest/rss', category: 'tech' },
+      { url: 'https://www.wired.com/feed/category/security/latest/rss', category: 'tech' },
+      { url: 'https://www.wired.com/feed/category/science/latest/rss', category: 'tech' },
+    ],
   },
   {
     id: 'arstechnica',
@@ -54,6 +67,7 @@ export const SOURCES = [
     feeds: [
       { url: 'https://feeds.bbci.co.uk/news/technology/rss.xml', category: 'tech' },
       { url: 'https://feeds.bbci.co.uk/news/world/rss.xml', category: 'world' },
+      { url: 'https://feeds.bbci.co.uk/news/rss.xml', category: 'world' },
     ],
   },
   {
@@ -63,7 +77,10 @@ export const SOURCES = [
     domain: 'theguardian.com',
     home: 'https://www.theguardian.com/world',
     color: '#052962',
-    feeds: [{ url: 'https://www.theguardian.com/world/rss', category: 'world' }],
+    feeds: [
+      { url: 'https://www.theguardian.com/world/rss', category: 'world' },
+      { url: 'https://www.theguardian.com/international/rss', category: 'world' },
+    ],
   },
   {
     id: 'aljazeera',
@@ -81,7 +98,10 @@ export const SOURCES = [
     domain: 'nytimes.com',
     home: 'https://www.nytimes.com/international/',
     color: '#111111',
-    feeds: [{ url: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', category: 'world' }],
+    feeds: [
+      { url: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', category: 'world' },
+      { url: 'https://rss.nytimes.com/services/xml/rss/nyt/TopStories.xml', category: 'world' },
+    ],
   },
   {
     id: 'reuters',

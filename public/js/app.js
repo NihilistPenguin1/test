@@ -12,7 +12,7 @@
     source: 'all',
     query: '',
     shown: 0,
-    pageSize: 12,
+    pageSize: 24,
     sources: [],
     live: null,
   };
@@ -466,6 +466,16 @@
     });
 
     $('#loadMoreBtn').addEventListener('click', () => renderGrid());
+
+    // Kaydırdıkça otomatik yükle (sonsuz akış)
+    if ('IntersectionObserver' in window) {
+      const io = new IntersectionObserver((entries) => {
+        if (entries.some((en) => en.isIntersecting) && state.shown < state.filtered.length) {
+          renderGrid();
+        }
+      }, { rootMargin: '600px 0px' });
+      io.observe($('#loadMoreBtn'));
+    }
 
     let searchTimer;
     $('#searchInput').addEventListener('input', (e) => {
