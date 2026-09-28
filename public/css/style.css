@@ -249,8 +249,8 @@ html[data-theme="dark"] .icon-moon { display: none; }
 /* ---------- Hero ---------- */
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 0.9fr);
-  gap: 28px;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 0.95fr);
+  gap: clamp(24px, 2.2vw, 44px);
   padding: 34px 0 10px;
 }
 .hero-lead { min-width: 0; }
@@ -401,8 +401,8 @@ html[data-theme="dark"] .icon-moon { display: none; }
 /* ---------- Akış düzeni ---------- */
 .feed-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 330px;
-  gap: 40px;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  gap: clamp(28px, 2.6vw, 52px);
   padding: 18px 0 40px;
 }
 .section-head {
@@ -426,7 +426,7 @@ html[data-theme="dark"] .icon-moon { display: none; }
 
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
   gap: 26px 24px;
 }
 .news-card {
