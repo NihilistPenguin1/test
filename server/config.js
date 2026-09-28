@@ -1,0 +1,223 @@
+// Telgraf — kaynak tanımları
+// Her kaynak birden fazla RSS/Atom beslemesi besleyebilir (bölüm feed'leriyle
+// ana sayfa kapsamına yakın hacim elde edilir).
+// Reuters ve AP resmi RSS'i kapattığı için Google News adaptörü kullanılıyor.
+
+export const CATEGORIES = {
+  tech: { id: 'tech', label: 'Teknoloji', accent: '#6d28d9' },
+  world: { id: 'world', label: 'Dünya', accent: '#0f766e' },
+};
+
+export const SOURCES = [
+  {
+    id: 'theverge',
+    name: 'The Verge',
+    short: 'Verge',
+    domain: 'theverge.com',
+    home: 'https://www.theverge.com/',
+    color: '#e85d04',
+    feeds: [{ url: 'https://www.theverge.com/rss/index.xml', category: 'tech' }],
+  },
+  {
+    id: 'techcrunch',
+    name: 'TechCrunch',
+    short: 'TC',
+    domain: 'techcrunch.com',
+    home: 'https://techcrunch.com/',
+    color: '#0a8f3c',
+    feeds: [
+      { url: 'https://techcrunch.com/feed/', category: 'tech' },
+      { url: 'https://techcrunch.com/category/artificial-intelligence/feed/', category: 'tech' },
+      { url: 'https://techcrunch.com/category/startups/feed/', category: 'tech' },
+      { url: 'https://techcrunch.com/category/gadgets/feed/', category: 'tech' },
+      { url: 'https://techcrunch.com/category/apps/feed/', category: 'tech' },
+    ],
+  },
+  {
+    id: 'wired',
+    name: 'WIRED',
+    short: 'Wired',
+    domain: 'wired.com',
+    home: 'https://www.wired.com/',
+    color: '#111111',
+    feeds: [
+      { url: 'https://www.wired.com/feed/rss', category: 'tech' },
+      { url: 'https://www.wired.com/feed/category/business/latest/rss', category: 'tech' },
+      { url: 'https://www.wired.com/feed/category/gear/latest/rss', category: 'tech' },
+      { url: 'https://www.wired.com/feed/category/security/latest/rss', category: 'tech' },
+      { url: 'https://www.wired.com/feed/category/science/latest/rss', category: 'tech' },
+    ],
+  },
+  {
+    id: 'arstechnica',
+    name: 'Ars Technica',
+    short: 'Ars',
+    domain: 'arstechnica.com',
+    home: 'https://arstechnica.com/',
+    color: '#ff4e00',
+    feeds: [{ url: 'https://feeds.arstechnica.com/arstechnica/index', category: 'tech' }],
+  },
+  {
+    id: 'bbc',
+    name: 'BBC News',
+    short: 'BBC',
+    domain: 'bbc.com',
+    home: 'https://www.bbc.com/',
+    color: '#bb1919',
+    feeds: [
+      { url: 'https://feeds.bbci.co.uk/news/technology/rss.xml', category: 'tech' },
+      { url: 'https://feeds.bbci.co.uk/news/world/rss.xml', category: 'world' },
+      { url: 'https://feeds.bbci.co.uk/news/rss.xml', category: 'world' },
+    ],
+  },
+  {
+    id: 'guardian',
+    name: 'The Guardian',
+    short: 'Guardian',
+    domain: 'theguardian.com',
+    home: 'https://www.theguardian.com/world',
+    color: '#052962',
+    feeds: [
+      { url: 'https://www.theguardian.com/world/rss', category: 'world' },
+      { url: 'https://www.theguardian.com/international/rss', category: 'world' },
+    ],
+  },
+  {
+    id: 'aljazeera',
+    name: 'Al Jazeera',
+    short: 'AJ',
+    domain: 'aljazeera.com',
+    home: 'https://www.aljazeera.com/',
+    color: '#b06a00',
+    feeds: [{ url: 'https://www.aljazeera.com/xml/rss/all.xml', category: 'world' }],
+  },
+  {
+    id: 'nytimes',
+    name: 'The New York Times',
+    short: 'NYT',
+    domain: 'nytimes.com',
+    home: 'https://www.nytimes.com/international/',
+    color: '#111111',
+    feeds: [
+      { url: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', category: 'world' },
+      { url: 'https://rss.nytimes.com/services/xml/rss/nyt/TopStories.xml', category: 'world' },
+    ],
+  },
+  {
+    id: 'reuters',
+    name: 'Reuters',
+    short: 'Reuters',
+    domain: 'reuters.com',
+    home: 'https://www.reuters.com/',
+    color: '#ff8000',
+    // Reuters resmi RSS'i kaldırdı — Google News üzerinden site bazlı akış
+    feeds: [{
+      url: 'https://news.google.com/rss/search?q=site%3Areuters.com%20when%3A2d&hl=en-US&gl=US&ceid=US%3Aen',
+      category: 'world',
+    }],
+  },
+  {
+    id: 'ap',
+    name: 'AP News',
+    short: 'AP',
+    domain: 'apnews.com',
+    home: 'https://apnews.com/',
+    color: '#e2231a',
+    // AP resmi RSS'i kapattı — Google News üzerinden site bazlı akış
+    feeds: [{
+      url: 'https://news.google.com/rss/search?q=site%3Aapnews.com%20when%3A2d&hl=en-US&gl=US&ceid=US%3Aen',
+      category: 'world',
+    }],
+  },
+  // ---- Ek kaynaklar ----
+  {
+    id: 'engadget',
+    name: 'Engadget',
+    short: 'Engadget',
+    domain: 'engadget.com',
+    home: 'https://www.engadget.com/',
+    color: '#2b2b2b',
+    feeds: [{ url: 'https://www.engadget.com/rss.xml', category: 'tech' }],
+  },
+  {
+    id: 'venturebeat',
+    name: 'VentureBeat',
+    short: 'VB',
+    domain: 'venturebeat.com',
+    home: 'https://venturebeat.com/',
+    color: '#1e6fd9',
+    feeds: [{ url: 'https://venturebeat.com/feed/', category: 'tech' }],
+  },
+  {
+    id: 'theregister',
+    name: 'The Register',
+    short: 'Reg',
+    domain: 'theregister.com',
+    home: 'https://www.theregister.com/',
+    color: '#a60000',
+    feeds: [{ url: 'https://www.theregister.com/software/headlines.atom', category: 'tech' }],
+  },
+  {
+    id: 'macrumors',
+    name: 'MacRumors',
+    short: 'MR',
+    domain: 'macrumors.com',
+    home: 'https://www.macrumors.com/',
+    color: '#6b6255',
+    feeds: [{ url: 'https://feeds.macrumors.com/MacRumors-All', category: 'tech' }],
+  },
+  {
+    id: 'hackernews',
+    name: 'Hacker News',
+    short: 'HN',
+    domain: 'news.ycombinator.com',
+    home: 'https://news.ycombinator.com/',
+    color: '#ff6600',
+    feeds: [{ url: 'https://hnrss.org/frontpage', category: 'tech' }],
+  },
+  {
+    id: 'france24',
+    name: 'France 24',
+    short: 'F24',
+    domain: 'france24.com',
+    home: 'https://www.france24.com/en/',
+    color: '#134074',
+    feeds: [{ url: 'https://www.france24.com/en/rss', category: 'world' }],
+  },
+  {
+    id: 'dw',
+    name: 'DW News',
+    short: 'DW',
+    domain: 'dw.com',
+    home: 'https://www.dw.com/en/',
+    color: '#003a70',
+    feeds: [{ url: 'https://rss.dw.com/rdf/rss-en-all', category: 'world' }],
+  },
+  {
+    id: 'skynews',
+    name: 'Sky News',
+    short: 'Sky',
+    domain: 'news.sky.com',
+    home: 'https://news.sky.com/',
+    color: '#b3122e',
+    feeds: [{ url: 'https://feeds.skynews.com/feeds/rss/world.xml', category: 'world' }],
+  },
+  {
+    id: 'nbcnews',
+    name: 'NBC News',
+    short: 'NBC',
+    domain: 'nbcnews.com',
+    home: 'https://www.nbcnews.com/',
+    color: '#1c5b96',
+    feeds: [{ url: 'https://feeds.nbcnews.com/nbcnews/public/world', category: 'world' }],
+  },
+];
+
+export const SOURCE_BY_ID = Object.fromEntries(SOURCES.map((s) => [s.id, s]));
+
+export const FETCH_TIMEOUT_MS = 12000;
+export const CACHE_TTL_MS = 5 * 60 * 1000; // haberler: 5 dk
+export const MARKET_TTL_MS = 60 * 1000;    // piyasa: 1 dk
+export const WEATHER_TTL_MS = 15 * 60 * 1000; // hava: 15 dk
+export const USER_AGENT =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 Telgraf/1.0';

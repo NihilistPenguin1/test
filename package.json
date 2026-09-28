@@ -1,0 +1,22 @@
+{
+  "name": "telgraf-haber",
+  "version": "1.0.0",
+  "description": "Telgraf — teknoloji ve dünya haberleri toplayıcı, piyasa ve hava durumu",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "build": "node scripts/build-static.mjs"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "express": "^4.21.2",
+    "fast-xml-parser": "^4.5.1",
+    "jsdom": "^30.1.1",
+    "sanitize-html": "^2.17.7"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
