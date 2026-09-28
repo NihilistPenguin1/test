@@ -6,7 +6,8 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node --watch server/index.js"
+    "dev": "node --watch server/index.js",
+    "build": "node scripts/build-static.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",

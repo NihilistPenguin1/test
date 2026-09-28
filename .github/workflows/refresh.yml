@@ -1,0 +1,52 @@
+name: Gece Haber Yenile
+
+# Her gece Türkiye saatiyle 00:00'da (UTC+3 → 21:00 UTC) haberleri tazeleyip
+# statik siteyi GitHub Pages'e yayar. Actions sekmesinden elle de çalıştırılabilir.
+on:
+  schedule:
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages-refresh
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Bağımlılıklar
+        run: npm ci
+
+      - name: Statik siteyi üret (haber + kapak görselleri + tam metin + piyasa + hava)
+        run: node scripts/build-static.mjs
+
+      - name: Pages arşivi yükle
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: GitHub Pages'e yayımla
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -78,13 +78,15 @@
   }
 
   // Görsel zinciri: feed/og görseli → /api/thumb çözümü → markalı yer tutucu
+  // (statik modda sunucu yok; doğrudan yer tutucuya düşülür — derleme tüm
+  //  görselleri hazır koyduğu için bu yol nadiren kullanılır)
   function thumbURL(link) {
     return `/api/thumb?u=${encodeURIComponent(link)}`;
   }
   window.__imgFail = (img) => {
     const src = img.getAttribute('src') || '';
     const link = img.dataset.link;
-    if (link && !src.startsWith('/api/thumb')) {
+    if (link && !window.__STATIC_MODE && !src.startsWith('/api/thumb')) {
       img.src = thumbURL(link);
       return;
     }
@@ -481,11 +483,7 @@
 
     const loading = $('#modalLoading');
     loading.hidden = false;
-    fetch(`/api/news/${item.id}/full`)
-      .then((r) => {
-        if (!r.ok) throw new Error('content unavailable');
-        return r.json();
-      })
+    fetchFullJSON(item.id)
       .then((data) => {
         if ($('#articleModal').hidden || state.currentId !== id) return;
         loading.hidden = true;
@@ -698,12 +696,41 @@
   }
 
   /* ---------- Veri yükleme ---------- */
+  /* ---------- Veri katmanı: statik JSON (GitHub Pages) → /api (yerel Express) ---------- */
+  async function fetchJSON(staticPath, apiPath) {
+    try {
+      const r = await fetch(staticPath, { cache: 'no-cache' });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && typeof j === 'object') {
+          window.__STATIC_MODE = true;
+          return j;
+        }
+      }
+    } catch { /* statik veri yok — yerel sunucu dene */ }
+    const r = await fetch(apiPath);
+    return r.json();
+  }
+
+  async function fetchFullJSON(id) {
+    try {
+      const r = await fetch(`data/full/${encodeURIComponent(id)}.json`, { cache: 'no-cache' });
+      if (r.ok) {
+        window.__STATIC_MODE = true;
+        return await r.json();
+      }
+    } catch { /* statik veri yok */ }
+    const r = await fetch(`/api/news/${encodeURIComponent(id)}/full`);
+    if (!r.ok) throw new Error('content unavailable');
+    return r.json();
+  }
+
   async function loadAll() {
     const [newsRes, marketRes, weatherRes, sourcesRes] = await Promise.allSettled([
-      fetch('/api/news').then((r) => r.json()),
-      fetch('/api/market').then((r) => r.json()),
-      fetch('/api/weather').then((r) => r.json()),
-      fetch('/api/sources').then((r) => r.json()),
+      fetchJSON('data/news.json', '/api/news'),
+      fetchJSON('data/market.json', '/api/market'),
+      fetchJSON('data/weather.json', '/api/weather'),
+      fetchJSON('data/sources.json', '/api/sources'),
     ]);
 
     if (sourcesRes.status === 'fulfilled') {
