@@ -1,4 +1,4 @@
-// Pusula Haber — kaynak tanımları
+// Telgraf — kaynak tanımları
 // Her kaynak birden fazla RSS/Atom beslemesi besleyebilir (bölüm feed'leriyle
 // ana sayfa kapsamına yakın hacim elde edilir).
 // Reuters ve AP resmi RSS'i kapattığı için Google News adaptörü kullanılıyor.
@@ -129,6 +129,88 @@ export const SOURCES = [
       category: 'world',
     }],
   },
+  // ---- Ek kaynaklar ----
+  {
+    id: 'engadget',
+    name: 'Engadget',
+    short: 'Engadget',
+    domain: 'engadget.com',
+    home: 'https://www.engadget.com/',
+    color: '#2b2b2b',
+    feeds: [{ url: 'https://www.engadget.com/rss.xml', category: 'tech' }],
+  },
+  {
+    id: 'venturebeat',
+    name: 'VentureBeat',
+    short: 'VB',
+    domain: 'venturebeat.com',
+    home: 'https://venturebeat.com/',
+    color: '#1e6fd9',
+    feeds: [{ url: 'https://venturebeat.com/feed/', category: 'tech' }],
+  },
+  {
+    id: 'theregister',
+    name: 'The Register',
+    short: 'Reg',
+    domain: 'theregister.com',
+    home: 'https://www.theregister.com/',
+    color: '#a60000',
+    feeds: [{ url: 'https://www.theregister.com/software/headlines.atom', category: 'tech' }],
+  },
+  {
+    id: 'macrumors',
+    name: 'MacRumors',
+    short: 'MR',
+    domain: 'macrumors.com',
+    home: 'https://www.macrumors.com/',
+    color: '#6b6255',
+    feeds: [{ url: 'https://feeds.macrumors.com/MacRumors-All', category: 'tech' }],
+  },
+  {
+    id: 'hackernews',
+    name: 'Hacker News',
+    short: 'HN',
+    domain: 'news.ycombinator.com',
+    home: 'https://news.ycombinator.com/',
+    color: '#ff6600',
+    feeds: [{ url: 'https://hnrss.org/frontpage', category: 'tech' }],
+  },
+  {
+    id: 'france24',
+    name: 'France 24',
+    short: 'F24',
+    domain: 'france24.com',
+    home: 'https://www.france24.com/en/',
+    color: '#134074',
+    feeds: [{ url: 'https://www.france24.com/en/rss', category: 'world' }],
+  },
+  {
+    id: 'dw',
+    name: 'DW News',
+    short: 'DW',
+    domain: 'dw.com',
+    home: 'https://www.dw.com/en/',
+    color: '#003a70',
+    feeds: [{ url: 'https://rss.dw.com/rdf/rss-en-all', category: 'world' }],
+  },
+  {
+    id: 'skynews',
+    name: 'Sky News',
+    short: 'Sky',
+    domain: 'news.sky.com',
+    home: 'https://news.sky.com/',
+    color: '#b3122e',
+    feeds: [{ url: 'https://feeds.skynews.com/feeds/rss/world.xml', category: 'world' }],
+  },
+  {
+    id: 'nbcnews',
+    name: 'NBC News',
+    short: 'NBC',
+    domain: 'nbcnews.com',
+    home: 'https://www.nbcnews.com/',
+    color: '#1c5b96',
+    feeds: [{ url: 'https://feeds.nbcnews.com/nbcnews/public/world', category: 'world' }],
+  },
 ];
 
 export const SOURCE_BY_ID = Object.fromEntries(SOURCES.map((s) => [s.id, s]));
@@ -138,4 +220,4 @@ export const CACHE_TTL_MS = 5 * 60 * 1000; // haberler: 5 dk
 export const MARKET_TTL_MS = 60 * 1000;    // piyasa: 1 dk
 export const WEATHER_TTL_MS = 15 * 60 * 1000; // hava: 15 dk
 export const USER_AGENT =
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 PusulaHaber/1.0';
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 Telgraf/1.0';

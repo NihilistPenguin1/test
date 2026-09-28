@@ -1,7 +1,7 @@
 {
-  "name": "pusula-haber",
+  "name": "telgraf-haber",
   "version": "1.0.0",
-  "description": "Pusula Haber - Teknoloji ve dünya haberleri toplayıcı (RSS), piyasa ve hava durumu",
+  "description": "Telgraf — teknoloji ve dünya haberleri toplayıcı, piyasa ve hava durumu",
   "type": "module",
   "main": "server/index.js",
   "scripts": {

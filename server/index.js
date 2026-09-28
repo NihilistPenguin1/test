@@ -1,4 +1,4 @@
-// Pusula Haber — Express sunucu
+// Telgraf — Express sunucu
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +24,7 @@ app.use(express.static(PUBLIC, {
 // ---- API ----
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, service: 'pusula-haber', time: new Date().toISOString() });
+  res.json({ ok: true, service: 'telgraf-haber', time: new Date().toISOString() });
 });
 
 app.get('/api/sources', (_req, res) => {
@@ -110,7 +110,7 @@ app.get('*', (_req, res) => {
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Pusula Haber http://0.0.0.0:${PORT} üzerinde çalışıyor`);
+  console.log(`Telgraf http://0.0.0.0:${PORT} üzerinde çalışıyor`);
   // Açılışta bir kez ön ısıtma (hatalar sessizce yutulur, seed'e düşülür)
   getNews().then((r) => console.log(`Haberler hazır: ${r.items.length} kayıt (canlı=${r.live})`)).catch(() => {});
 });

@@ -1,4 +1,4 @@
-/* PUSULA HABER — arayüz mantığı */
+/* TELGRAF — arayüz mantığı */
 (() => {
   'use strict';
 
@@ -15,6 +15,11 @@
     pageSize: 24,
     sources: [],
     live: null,
+    favs: new Set(JSON.parse(localStorage.getItem('telgraf-favs') || '[]')),
+    knownIds: new Set(),
+    articleScale: Number(localStorage.getItem('telgraf-scale') || 1),
+    speaking: false,
+    currentId: null,
   };
 
   /* ---------- Yardımcılar ---------- */
@@ -47,21 +52,21 @@
     return Number(n).toLocaleString('tr-TR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
   }
 
-  // Görsel yoksa kaynak renkli SVG yer tutucu
   function placeholderSVG(title, sourceId) {
-    const meta = SOURCE_META[sourceId] || { name: 'Pusula', color: '#6f675e' };
+    const meta = SOURCE_META[sourceId] || { name: 'Telgraf', short: 'TG', color: '#6f6559' };
     const label = esc((meta.short || meta.name || 'Haber').slice(0, 14));
     const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='800' height='450'>
       <defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>
-        <stop offset='0' stop-color='${meta.color}' stop-opacity='0.92'/>
-        <stop offset='1' stop-color='#1a1611' stop-opacity='0.95'/></linearGradient></defs>
+        <stop offset='0' stop-color='${meta.color}' stop-opacity='0.9'/>
+        <stop offset='1' stop-color='#201b15' stop-opacity='0.95'/></linearGradient></defs>
       <rect width='800' height='450' fill='url(#g)'/>
-      <circle cx='700' cy='80' r='160' fill='#ffffff' opacity='0.07'/>
-      <circle cx='90' cy='400' r='120' fill='#ffffff' opacity='0.06'/>
-      <text x='50%' y='49%' text-anchor='middle' font-family='Georgia,serif' font-size='42' fill='#ffffff' opacity='0.95' font-weight='bold' letter-spacing='6'>${label}</text>
-      <text x='50%' y='58%' text-anchor='middle' font-family='Helvetica,Arial' font-size='17' fill='#ffffff' opacity='0.65' letter-spacing='3'>PUSULA · HABER</text>
+      <circle cx='700' cy='80' r='160' fill='#ffffff' opacity='0.06'/>
+      <circle cx='90' cy='400' r='120' fill='#ffffff' opacity='0.05'/>
+      <circle cx='330' cy='228' r='9' fill='#ffffff' opacity='0.9'/>
+      <rect x='356' y='219' width='40' height='18' rx='9' fill='#c1272d'/>
+      <circle cx='422' cy='228' r='9' fill='#ffffff' opacity='0.9'/>
+      <text x='50%' y='62%' text-anchor='middle' font-family='Helvetica,Arial' font-size='18' fill='#ffffff' opacity='0.7' letter-spacing='5'>TELGRAF · HABER</text>
     </svg>`;
-    // Tek tırnaklar onerror özniteliğini kırmasın diye kodlanır
     return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg).replace(/'/g, '%27')}`;
   }
 
@@ -72,7 +77,7 @@
   }
 
   function srcBadge(sourceId) {
-    const meta = SOURCE_META[sourceId] || { name: sourceId, color: '#6f675e', domain: '' };
+    const meta = SOURCE_META[sourceId] || { name: sourceId, color: '#6f6559', domain: '' };
     return `<span class="src-badge" style="background:${meta.color}">
       ${meta.domain ? `<img src="${favicon(meta.domain)}" alt="" onerror="this.style.display='none'" />` : ''}
       ${esc(meta.short || meta.name)}</span>`;
@@ -83,7 +88,32 @@
     return `<span class="cat-tag cat-${cat}">${label}</span>`;
   }
 
-  /* ---------- Hava ikonları (inline SVG) ---------- */
+  /* ---------- Favoriler ---------- */
+  function saveFavs() {
+    localStorage.setItem('telgraf-favs', JSON.stringify([...state.favs]));
+    const c = $('#favCount');
+    if (c) c.textContent = state.favs.size ? state.favs.size : '';
+  }
+
+  function toggleFav(id, btn) {
+    if (state.favs.has(id)) state.favs.delete(id);
+    else state.favs.add(id);
+    saveFavs();
+    if (btn) {
+      btn.classList.toggle('active', state.favs.has(id));
+      btn.textContent = state.favs.has(id) ? '★' : '☆';
+    }
+    if (state.source === 'favs') applyFilters(false);
+    if (state.currentId === id) updateModalFav();
+  }
+
+  function updateModalFav() {
+    const on = state.favs.has(state.currentId);
+    $('#btnFav').classList.toggle('active', on);
+    $('#btnFavText').textContent = on ? 'Kaydedildi' : 'Kaydet';
+  }
+
+  /* ---------- Hava ikonları ---------- */
   function weatherIcon(type, size = 48) {
     const sun = `<circle cx='12' cy='12' r='5' fill='#f59e0b'/>`;
     const cloud = `<path d='M7 18h10a4 4 0 0 0 .6-7.96A6 6 0 0 0 6.1 11.2 3.5 3.5 0 0 0 7 18z' fill='#94a3b8'/>`;
@@ -101,10 +131,9 @@
     return icons[type] || icons.cloud;
   }
 
-  /* ---------- Ticker ---------- */
+  /* ---------- Ticker & Piyasa ---------- */
   function renderTicker(market) {
-    const track = $('#tickerTrack');
-    track.innerHTML = market.items.map((m) => {
+    $('#tickerTrack').innerHTML = market.items.map((m) => {
       const up = m.changePercent >= 0;
       return `<span class="ticker-item">
         <span class="ticker-name">${esc(m.name)}</span>
@@ -112,7 +141,7 @@
         <span class="ticker-chg ${up ? 'up' : 'down'}">${up ? '▲' : '▼'} %${fmtNum(Math.abs(m.changePercent), 2)}</span>
       </span>`;
     }).join('') + `<span class="ticker-item"><span class="ticker-name">${market.live ? 'Canlı veri' : 'Örnek veri'}</span>
-      <span class="ticker-price" style="color:${market.live ? '#34d399' : '#b7ab99'}">${market.live ? '●' : '○'}</span></span>`;
+      <span class="ticker-price" style="color:${market.live ? '#34d399' : '#b3a595'}">${market.live ? '●' : '○'}</span></span>`;
   }
 
   function renderMarketPanel(market) {
@@ -156,7 +185,6 @@
       </div>`;
   }
 
-  // Sunucu canlı veri veremezse tarayıcıdan dene (Open-Meteo CORS destekler)
   async function liveWeatherFallback() {
     try {
       const url = 'https://api.open-meteo.com/v1/forecast?latitude=41.0082&longitude=28.9784&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=Europe%2FIstanbul&forecast_days=5';
@@ -186,7 +214,6 @@
     } catch { /* sessiz */ }
   }
 
-  // Sunucu canlı piyasa veremezse tarayıcıdan dene (CORS proxy üzerinden Yahoo Finance)
   async function liveMarketFallback() {
     const SYMBOLS = [
       { symbol: 'XU100.IS', key: 'bist100', name: 'BIST 100', currency: 'TRY', decimals: 2 },
@@ -214,7 +241,7 @@
           } catch { /* sonraki proxy */ }
         }
         const result = json?.chart?.result?.[0];
-        if (!result) return; // toplu güncelleme yerine hiç dokunma
+        if (!result) return;
         const meta = result.meta;
         const price = meta.regularMarketPrice ?? meta.chartPreviousClose;
         const prev = meta.chartPreviousClose ?? price;
@@ -228,13 +255,17 @@
       }
       renderTicker({ items, live: true });
       renderMarketPanel({ items, live: true, fetchedAt: new Date().toISOString() });
-    } catch { /* sessiz: örnek veri kalır */ }
+    } catch { /* sessiz */ }
   }
 
   /* ---------- Kartlar ---------- */
   function cardHTML(item) {
+    const fav = state.favs.has(item.id);
     return `<article class="news-card" data-id="${item.id}" tabindex="0">
-      <div class="card-media">${imgTag(item)}</div>
+      <div class="card-media">
+        ${imgTag(item)}
+        <button class="fav-btn ${fav ? 'active' : ''}" data-fav="${item.id}" title="Kaydet" aria-label="Kaydet">${fav ? '★' : '☆'}</button>
+      </div>
       <div class="card-body">
         <div class="meta-row">${catTag(item.category)} ${srcBadge(item.source)} <time datetime="${item.published}" title="${fullTime(item.published)}">${relTime(item.published)}</time></div>
         <h3 class="card-title">${esc(item.title)}</h3>
@@ -245,8 +276,9 @@
 
   function applyFilters(resetShown = true) {
     let list = state.news;
+    if (state.source === 'favs') list = list.filter((i) => state.favs.has(i.id));
+    else if (state.source !== 'all') list = list.filter((i) => i.source === state.source);
     if (state.category !== 'all') list = list.filter((i) => i.category === state.category);
-    if (state.source !== 'all') list = list.filter((i) => i.source === state.source);
     if (state.query) {
       const n = state.query.toLocaleLowerCase('tr');
       list = list.filter((i) => i.title.toLocaleLowerCase('tr').includes(n) || (i.summary || '').toLocaleLowerCase('tr').includes(n));
@@ -260,11 +292,15 @@
     const grid = $('#cardGrid');
     const slice = state.filtered.slice(0, state.shown + state.pageSize);
     state.shown = slice.length;
-    grid.innerHTML = slice.map(cardHTML).join('') || `<p style="color:var(--muted)">Bu filtreyle eşleşen haber bulunamadı.</p>`;
+    grid.innerHTML = slice.map(cardHTML).join('') ||
+      `<p style="color:var(--muted);grid-column:1/-1">${
+        state.source === 'favs' ? 'Henüz kaydettiğin bir haber yok. Kartların üzerindeki ★ ile kaydedebilirsin.' : 'Bu filtreyle eşleşen haber bulunamadı.'
+      }</p>`;
     $('#feedCount').textContent = `${state.filtered.length} haber`;
     const btn = $('#loadMoreBtn');
     btn.disabled = state.shown >= state.filtered.length;
     btn.textContent = state.shown >= state.filtered.length ? 'Tüm haberler yüklendi' : 'Daha fazla haber yükle';
+    saveFavs();
   }
 
   /* ---------- Hero ---------- */
@@ -303,11 +339,10 @@
   function renderBreaking(items) {
     const top = items.slice(0, 10);
     const html = top.map((i) => `<a href="${esc(i.link)}" data-id="${i.id}" target="_blank" rel="noopener">${esc(i.title)}</a>`).join('<span style="opacity:.35">◆</span>');
-    $('#breakingTrack').innerHTML = html + `<span style="opacity:.35">◆</span>` + html; // marquee döngüsü
+    $('#breakingTrack').innerHTML = html + `<span style="opacity:.35">◆</span>` + html;
   }
 
   function renderTrending(items) {
-    // Sağdaki "Çok Okunanlar": ilk 5 + kaynak çeşitliliği
     const picks = [];
     const used = new Set();
     for (const it of items) {
@@ -337,11 +372,70 @@
         </div>
       </a>`).join('');
 
-    $('#sourceChips').innerHTML = `<button class="chip active" data-source="all">Tüm kaynaklar</button>` +
+    $('#sourceChips').innerHTML = `
+      <button class="chip active" data-source="all">Tüm kaynaklar</button>
+      <button class="chip chip-favs" data-source="favs"><span class="chip-star">★</span> Kaydedilenler <span class="fav-count" id="favCount"></span></button>` +
       state.sources.map((s) => `
         <button class="chip" data-source="${s.id}">
           <img src="${favicon(s.domain)}" alt="" onerror="this.style.display='none'" />${esc(s.name)}
         </button>`).join('');
+    saveFavs();
+  }
+
+  /* ---------- İlgili haberler ---------- */
+  function renderRelated(item) {
+    const tokens = new Set(
+      item.title.toLowerCase().split(/\W+/).filter((w) => w.length > 4)
+    );
+    const scored = state.news
+      .filter((i) => i.id !== item.id)
+      .map((i) => {
+        const words = i.title.toLowerCase().split(/\W+/);
+        let score = words.reduce((acc, w) => acc + (tokens.has(w) ? 1 : 0), 0);
+        if (i.source === item.source) score += 0.5;
+        return { i, score };
+      })
+      .filter((x) => x.score >= 1.5)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3);
+
+    const box = $('#modalRelated');
+    if (!scored.length) { box.hidden = true; return; }
+    box.hidden = false;
+    $('#relatedList').innerHTML = scored.map(({ i }) => `
+      <div class="related-item" data-id="${i.id}">
+        <div class="related-thumb">${imgTag(i)}</div>
+        <div>
+          <div class="meta-row">${srcBadge(i.source)} <time>${relTime(i.published)}</time></div>
+          <div class="related-title-t">${esc(i.title)}</div>
+        </div>
+      </div>`).join('');
+  }
+
+  /* ---------- Sesli okuma ---------- */
+  function stopSpeech() {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    state.speaking = false;
+    $('#btnSpeak').classList.remove('active');
+    $('#btnSpeakText').textContent = 'Sesli dinle';
+  }
+
+  function toggleSpeech() {
+    if (!('speechSynthesis' in window)) return;
+    if (state.speaking) { stopSpeech(); return; }
+    const title = $('#modalTitle').textContent;
+    const contentText = [...$$('#modalContent p, #modalContent h3, #modalContent h4')]
+      .map((e) => e.textContent).join('. ').slice(0, 3500);
+    const text = `${title}. ${contentText || $('#modalSummary').textContent}`;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-US';
+    u.rate = 1.02;
+    u.onend = stopSpeech;
+    u.onerror = stopSpeech;
+    window.speechSynthesis.speak(u);
+    state.speaking = true;
+    $('#btnSpeak').classList.add('active');
+    $('#btnSpeakText').textContent = 'Durdur';
   }
 
   /* ---------- Modal ---------- */
@@ -349,6 +443,7 @@
     const item = state.news.find((i) => i.id === id);
     if (!item) return;
     const meta = SOURCE_META[item.source] || {};
+    state.currentId = id;
     $('#modalMedia').innerHTML = imgTag(item);
     $('#modalSource').innerHTML = `${srcBadge(item.source)} ${catTag(item.category)}`;
     $('#modalTime').textContent = fullTime(item.published);
@@ -360,9 +455,14 @@
     $('#modalReadTime').textContent = '';
     $('#modalLink').href = item.link;
     $('#articleModal').hidden = false;
+    $('#modalCard').scrollTop = 0;
+    $('#readProgress').style.width = '0%';
     document.body.style.overflow = 'hidden';
+    $('#shareMenu').hidden = true;
+    updateModalFav();
+    renderRelated(item);
+    applyArticleScale();
 
-    // Tam metni getir (haberi sitede oku)
     const loading = $('#modalLoading');
     loading.hidden = false;
     fetch(`/api/news/${item.id}/full`)
@@ -371,7 +471,7 @@
         return r.json();
       })
       .then((data) => {
-        if ($('#articleModal').hidden) return; // modal kapanmışsa atla
+        if ($('#articleModal').hidden || state.currentId !== id) return;
         loading.hidden = true;
         const a = data.article;
         if (a && a.content) {
@@ -380,11 +480,9 @@
           if (a.image) $('#modalMedia').innerHTML = `<img src="${esc(a.image)}" alt="${esc(a.title)}"
             onerror="this.onerror=null;this.src='${placeholderSVG(item.title, item.source)}'" />`;
           $('#modalReadTime').textContent = `· ~${a.readingMinutes} dk okuma`;
-          $('#modalAuthor').textContent = `Kaynak: ${meta.name || item.source}${a.author ? ' · ' + a.author : ''}${item.author && a.author !== item.author ? ' · ' + item.author : ''}`;
-          // Gerçek makale linki (Google News yönlendirmesi çözülmüş olabilir)
+          $('#modalAuthor').textContent = `Kaynak: ${meta.name || item.source}${a.author ? ' · ' + a.author : ''}`;
           if (a.resolvedUrl && !a.resolvedUrl.includes('news.google.com')) $('#modalLink').href = a.resolvedUrl;
         } else {
-          loading.hidden = true;
           $('#modalSummary').hidden = false;
           if (!$('#modalSummary').textContent) {
             $('#modalSummary').textContent = 'Bu haber için tam metin getirilemedi. Devamını kaynak yayının sayfasında okuyabilirsiniz.';
@@ -392,7 +490,7 @@
         }
       })
       .catch(() => {
-        if ($('#articleModal').hidden) return;
+        if (state.currentId !== id) return;
         loading.hidden = true;
         $('#modalSummary').hidden = false;
         if (!$('#modalSummary').textContent) {
@@ -400,29 +498,74 @@
         }
       });
   }
+
   function closeModal() {
     $('#articleModal').hidden = true;
     document.body.style.overflow = '';
+    state.currentId = null;
+    stopSpeech();
+    $('#shareMenu').hidden = true;
+  }
+
+  function applyArticleScale() {
+    document.documentElement.style.setProperty('--article-scale', state.articleScale.toFixed(2));
+  }
+
+  /* ---------- Paylaş ---------- */
+  function currentShareData() {
+    const item = state.news.find((i) => i.id === state.currentId);
+    if (!item) return null;
+    return { title: item.title, url: $('#modalLink').href || item.link };
+  }
+
+  function handleShare(kind) {
+    const d = currentShareData();
+    if (!d) return;
+    const enc = encodeURIComponent;
+    if (kind === 'copy') {
+      (navigator.clipboard?.writeText(`${d.title} — ${d.url}`) || Promise.reject())
+        .then(() => {
+          const btn = $('#shareMenu [data-share="copy"]');
+          const old = btn.textContent;
+          btn.textContent = '✓ Kopyalandı!';
+          setTimeout(() => { btn.textContent = old; }, 1500);
+        })
+        .catch(() => window.prompt('Bağlantı:', d.url));
+      return;
+    }
+    const links = {
+      x: `https://twitter.com/intent/tweet?text=${enc(d.title)}&url=${enc(d.url)}`,
+      wa: `https://wa.me/?text=${enc(d.title + ' ' + d.url)}`,
+      li: `https://www.linkedin.com/sharing/share-offsite/?url=${enc(d.url)}`,
+    };
+    window.open(links[kind], '_blank', 'noopener,width=620,height=560');
   }
 
   /* ---------- Tema ---------- */
   function initTheme() {
-    const saved = localStorage.getItem('pusula-theme');
+    const saved = localStorage.getItem('telgraf-theme');
     const theme = saved || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     document.documentElement.dataset.theme = theme;
     $('#themeBtn').addEventListener('click', () => {
       const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
       document.documentElement.dataset.theme = next;
-      localStorage.setItem('pusula-theme', next);
+      localStorage.setItem('telgraf-theme', next);
     });
   }
 
   /* ---------- Olaylar ---------- */
   function initEvents() {
     document.addEventListener('click', (e) => {
-      // Manşet / yan kart / son dakika: normal tık sitede okuma görünümünü açar
-      // (Ctrl/Cmd+tık ve orta tık orijinal haberi yeni sekmede açar)
-      const heroLink = e.target.closest('.lead-card[data-id], .side-card[data-id], .breaking-track a[data-id]');
+      // Favori düğmesi
+      const favBtn = e.target.closest('.fav-btn[data-fav]');
+      if (favBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleFav(favBtn.dataset.fav, favBtn);
+        return;
+      }
+      // Manşet / yan kart / son dakika / ilgili haberler
+      const heroLink = e.target.closest('.lead-card[data-id], .side-card[data-id], .breaking-track a[data-id], .related-item[data-id]');
       if (heroLink && e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
         e.preventDefault();
         openModal(heroLink.dataset.id);
@@ -431,6 +574,23 @@
       const card = e.target.closest('.news-card, .latest-item, .trend-item');
       if (card && card.dataset.id) { openModal(card.dataset.id); return; }
       if (e.target.closest('[data-close]')) { closeModal(); return; }
+
+      // Paylaş menüsü
+      if (e.target.closest('#btnShare')) {
+        const m = $('#shareMenu');
+        m.hidden = !m.hidden;
+        return;
+      }
+      const shareItem = e.target.closest('[data-share]');
+      if (shareItem) {
+        e.preventDefault();
+        handleShare(shareItem.dataset.share);
+        if (shareItem.dataset.share !== 'copy') $('#shareMenu').hidden = true;
+        return;
+      }
+      if (!e.target.closest('#shareGroup')) $('#shareMenu').hidden = true;
+
+      // Kategori
       const navCat = e.target.closest('.nav-link[data-cat]');
       if (navCat) {
         e.preventDefault();
@@ -448,11 +608,18 @@
         if (btn) btn.click();
         return;
       }
+      // Kaynak çipi
       const chip = e.target.closest('.chip');
       if (chip) {
         state.source = chip.dataset.source;
         $$('.chip').forEach((c) => c.classList.toggle('active', c === chip));
         applyFilters();
+        return;
+      }
+      // Yeni haber bildirimi
+      if (e.target.closest('#newItemsPill')) {
+        $('#newItemsPill').hidden = true;
+        window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
     });
@@ -467,7 +634,6 @@
 
     $('#loadMoreBtn').addEventListener('click', () => renderGrid());
 
-    // Kaydırdıkça otomatik yükle (sonsuz akış)
     if ('IntersectionObserver' in window) {
       const io = new IntersectionObserver((entries) => {
         if (entries.some((en) => en.isIntersecting) && state.shown < state.filtered.length) {
@@ -486,9 +652,31 @@
       }, 220);
     });
     $('#searchForm').addEventListener('submit', (e) => e.preventDefault());
+    $('#menuBtn').addEventListener('click', () => $('#mainNav').scrollIntoView({ behavior: 'smooth' }));
 
-    $('#menuBtn').addEventListener('click', () => {
-      $('#mainNav').scrollIntoView({ behavior: 'smooth' });
+    // Okuma araçları
+    $('#btnSpeak').addEventListener('click', toggleSpeech);
+    $('#btnFontUp').addEventListener('click', () => {
+      state.articleScale = Math.min(1.5, state.articleScale + 0.1);
+      localStorage.setItem('telgraf-scale', state.articleScale);
+      applyArticleScale();
+    });
+    $('#btnFontDown').addEventListener('click', () => {
+      state.articleScale = Math.max(0.8, state.articleScale - 0.1);
+      localStorage.setItem('telgraf-scale', state.articleScale);
+      applyArticleScale();
+    });
+    $('#btnPrint').addEventListener('click', () => window.print());
+    $('#btnFav').addEventListener('click', () => {
+      if (state.currentId) toggleFav(state.currentId);
+    });
+
+    // Okuma ilerleme çubuğu
+    $('#modalCard').addEventListener('scroll', (e) => {
+      const el = e.target;
+      const max = el.scrollHeight - el.clientHeight;
+      const pct = max > 0 ? (el.scrollTop / max) * 100 : 0;
+      $('#readProgress').style.width = `${Math.min(100, pct)}%`;
     });
   }
 
@@ -508,6 +696,15 @@
     }
 
     if (newsRes.status === 'fulfilled' && newsRes.value.items) {
+      const isFirst = state.knownIds.size === 0;
+      let newCount = 0;
+      newsRes.value.items.forEach((i) => {
+        if (!state.knownIds.has(i.id)) {
+          state.knownIds.add(i.id);
+          if (!isFirst) newCount++;
+        }
+      });
+
       state.news = newsRes.value.items;
       state.live = newsRes.value.live;
       renderHero(state.news);
@@ -515,10 +712,17 @@
       renderTrending(state.news);
       applyFilters();
 
+      // Yeni haber bildirimi (ilk yüklemede değil)
+      if (newCount > 0) {
+        $('#newItemsText').textContent = `${newCount} yeni haber geldi`;
+        $('#newItemsPill').hidden = false;
+        setTimeout(() => { $('#newItemsPill').hidden = true; }, 15000);
+      }
+
       const dot = $('.live-dot');
       const txt = $('#navLiveText');
       if (newsRes.value.live) {
-        txt.textContent = `canlı · son güncelleme ${new Date(newsRes.value.fetchedAt).toLocaleTimeString('tr-TR')}`;
+        txt.textContent = `canlı · ${new Date(newsRes.value.fetchedAt).toLocaleTimeString('tr-TR')}`;
       } else {
         dot.classList.add('offline');
         txt.textContent = 'çevrimdışı mod · tohum veri';
@@ -541,13 +745,13 @@
   function init() {
     initTheme();
     initEvents();
+    applyArticleScale();
     const now = new Date();
     $('#headerDate').textContent = now.toLocaleDateString('tr-TR', {
       weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
     });
     $('#year').textContent = now.getFullYear();
     loadAll();
-    // 5 dakikada bir tazele
     setInterval(loadAll, 5 * 60 * 1000);
   }
 

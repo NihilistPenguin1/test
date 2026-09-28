@@ -3,15 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Pusula Haber — Teknoloji ve Dünya Gündemi</title>
-  <meta name="description" content="Pusula Haber: The Verge, TechCrunch, WIRED, Ars Technica, BBC, Reuters, Guardian, AP, Al Jazeera ve New York Times kaynaklarından güncel teknoloji ve dünya haberleri. BIST 100, döviz ve İstanbul hava durumu." />
+  <title>TELGRAF — Teknoloji ve Dünya Gündemi</title>
+  <meta name="description" content="TELGRAF: Dünyanın önde gelen teknoloji ve haber yayınlarından başlıklar, BIST 100 ve piyasa verileri, İstanbul hava durumu. Haberleri sitede okuyun." />
+  <meta name="theme-color" content="#faf7f2" />
   <link rel="icon" href="/img/favicon.svg" type="image/svg+xml" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,700;0,800;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/css/style.css?v=4" />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;0,800;1,600&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css?v=5" />
 </head>
 <body>
+  <a class="skip-link" href="#mainContent">İçeriğe geç</a>
+
   <!-- ===================== PİYASA ŞERİDİ ===================== -->
   <div class="ticker-bar" aria-label="Piyasa verileri">
     <div class="ticker-track" id="tickerTrack">
@@ -19,30 +22,33 @@
     </div>
   </div>
 
-  <!-- ===================== ÜST BAR / MASTHEAD ===================== -->
+  <!-- ===================== MASTHEAD ===================== -->
   <header class="masthead">
     <div class="container masthead-row">
       <div class="masthead-left">
         <button class="icon-btn menu-btn" id="menuBtn" aria-label="Menü">
           <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/></svg>
         </button>
-        <div class="date-weather" id="headerWeather">
+        <div class="date-weather">
           <span class="hw-date" id="headerDate"></span>
           <span class="hw-sep">·</span>
           <span class="hw-weather" id="headerWeatherMini">İstanbul —</span>
         </div>
       </div>
-      <a class="brand" href="#" aria-label="Pusula Haber ana sayfa">
-        <svg class="brand-mark" viewBox="0 0 48 48" width="44" height="44" aria-hidden="true">
-          <circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="3"/>
-          <path d="M24 7 L29 24 L24 41 L19 24 Z" fill="var(--accent)"/>
-          <circle cx="24" cy="24" r="3.5" fill="currentColor"/>
+
+      <a class="brand" href="#" aria-label="TELGRAF ana sayfa">
+        <svg class="brand-mark" viewBox="0 0 48 48" width="42" height="42" aria-hidden="true">
+          <rect x="2" y="2" width="44" height="44" rx="11" fill="currentColor"/>
+          <circle cx="13.5" cy="24" r="3.1" fill="var(--bg)"/>
+          <rect x="19.5" y="21" width="10.5" height="6" rx="3" fill="var(--accent)"/>
+          <circle cx="35.5" cy="24" r="3.1" fill="var(--bg)"/>
         </svg>
         <span class="brand-text">
-          <span class="brand-name">PUSULA</span>
-          <span class="brand-tag">Haber · Teknoloji · Dünya</span>
+          <span class="brand-name">TELGRAF</span>
+          <span class="brand-tag">Haber Servisi</span>
         </span>
       </a>
+
       <div class="masthead-right">
         <form class="search-box" id="searchForm" role="search">
           <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -55,14 +61,13 @@
       </div>
     </div>
 
-    <!-- Ana navigasyon -->
     <nav class="main-nav" id="mainNav" aria-label="Kategoriler">
       <div class="container nav-row">
         <button class="nav-link active" data-cat="all">Tümü</button>
         <button class="nav-link" data-cat="tech">Teknoloji</button>
         <button class="nav-link" data-cat="world">Dünya</button>
         <a class="nav-link" href="#piyasa">Piyasa</a>
-        <a class="nav-link" href="#hava">Hava Durumu</a>
+        <a class="nav-link" href="#hava">Hava</a>
         <a class="nav-link" href="#kaynaklar">Kaynaklar</a>
         <span class="nav-live" id="navLiveStatus" title="Veri durumu">
           <span class="live-dot"></span><span id="navLiveText">bağlanıyor…</span>
@@ -71,15 +76,15 @@
     </nav>
   </header>
 
-  <!-- ===================== SON DAKİKA ŞERİDİ ===================== -->
+  <!-- ===================== SON DAKİKA ===================== -->
   <div class="breaking-bar" id="breakingBar">
     <div class="container breaking-row">
       <span class="breaking-label"><span class="breaking-dot"></span>SON DAKİKA</span>
-      <div class="breaking-scroll"><div class="breaking-track" id="breakingTrack">Günemin öne çıkan başlıkları…</div></div>
+      <div class="breaking-scroll"><div class="breaking-track" id="breakingTrack">Gündemin öne çıkan başlıkları…</div></div>
     </div>
   </div>
 
-  <main class="container">
+  <main class="container" id="mainContent">
     <!-- ===================== HERO ===================== -->
     <section class="hero" id="heroSection" aria-label="Öne çıkan haberler">
       <div class="hero-lead" id="heroLead">
@@ -101,10 +106,11 @@
       </aside>
     </section>
 
-    <!-- ===================== KAYNAK FİLTRELERİ ===================== -->
-    <section class="source-strip" aria-label="Kaynaklara göre filtrele">
+    <!-- ===================== FİLTRELER ===================== -->
+    <section class="source-strip" aria-label="Filtrele">
       <div class="source-chips" id="sourceChips">
         <button class="chip active" data-source="all">Tüm kaynaklar</button>
+        <button class="chip chip-favs" data-source="favs"><span class="chip-star">★</span> Kaydedilenler <span class="fav-count" id="favCount"></span></button>
       </div>
     </section>
 
@@ -128,22 +134,18 @@
         </div>
       </div>
 
-      <!-- Yan panel: piyasa + hava + popüler -->
       <aside class="feed-aside">
-        <!-- Hava durumu -->
         <section class="aside-card weather-card" id="hava">
           <h3 class="panel-title"><span class="panel-accent"></span>İstanbul Hava Durumu</h3>
           <div id="weatherPanel"><div class="skeleton sk-line"></div><div class="skeleton sk-line"></div></div>
         </section>
 
-        <!-- Piyasa -->
         <section class="aside-card" id="piyasa">
           <h3 class="panel-title"><span class="panel-accent"></span>Piyasa</h3>
           <div class="market-list" id="marketPanel"><div class="skeleton sk-line"></div><div class="skeleton sk-line"></div><div class="skeleton sk-line"></div></div>
           <p class="panel-note" id="marketNote"></p>
         </section>
 
-        <!-- Çok okunanlar -->
         <section class="aside-card">
           <h3 class="panel-title"><span class="panel-accent"></span>Çok Okunanlar</h3>
           <ol class="trend-list" id="trendList"></ol>
@@ -155,16 +157,17 @@
     <section class="sources-section" id="kaynaklar">
       <div class="section-head">
         <h2 class="section-title">Kaynaklarımız</h2>
-        <p class="section-sub">Haberler bu yayınların resmi RSS beslemelerinden otomatik toplanır; her kart kaynağa bağlantı verir.</p>
+        <p class="section-sub">Haberler bu yayınların resmi beslemelerinden otomatik toplanır; her kart kaynağa bağlantı verir.</p>
       </div>
       <div class="sources-grid" id="sourcesGrid"></div>
     </section>
   </main>
 
-  <!-- ===================== HABER DETAY ===================== -->
+  <!-- ===================== HABER DETAY / OKUMA ===================== -->
   <div class="modal" id="articleModal" hidden>
     <div class="modal-backdrop" data-close></div>
-    <article class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <article class="modal-card" id="modalCard" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="read-progress" id="readProgress"></div>
       <button class="modal-close icon-btn" data-close aria-label="Kapat">
         <svg viewBox="0 0 24 24" width="20" height="20"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </button>
@@ -176,12 +179,47 @@
           <span class="modal-readtime" id="modalReadTime"></span>
         </div>
         <h2 id="modalTitle"></h2>
+
+        <div class="modal-toolbar" role="toolbar" aria-label="Okuma araçları">
+          <button class="tool-btn" id="btnSpeak" title="Haberi sesli dinle">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 9v6h4l6 5V4L8 9H4z" fill="currentColor"/><path d="M17 8.5a5 5 0 0 1 0 7M19.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+            <span id="btnSpeakText">Sesli dinle</span>
+          </button>
+          <div class="tool-group" aria-label="Yazı boyutu">
+            <button class="tool-btn tool-icon" id="btnFontDown" title="Yazıyı küçült">A−</button>
+            <button class="tool-btn tool-icon" id="btnFontUp" title="Yazıyı büyüt">A+</button>
+          </div>
+          <div class="tool-group" id="shareGroup">
+            <button class="tool-btn" id="btnShare" title="Paylaş">
+              <svg viewBox="0 0 24 24" width="16" height="16"><circle cx="6" cy="12" r="2.5" fill="currentColor"/><circle cx="17.5" cy="6" r="2.5" fill="currentColor"/><circle cx="17.5" cy="18" r="2.5" fill="currentColor"/><path d="M8.2 11l7-3.8M8.2 13l7 3.8" stroke="currentColor" stroke-width="1.7"/></svg>
+              <span>Paylaş</span>
+            </button>
+            <div class="share-menu" id="shareMenu" hidden>
+              <button class="share-item" data-share="copy">🔗 Bağlantıyı kopyala</button>
+              <a class="share-item" data-share="x" target="_blank" rel="noopener">𝕏 X'te paylaş</a>
+              <a class="share-item" data-share="wa" target="_blank" rel="noopener">WhatsApp</a>
+              <a class="share-item" data-share="li" target="_blank" rel="noopener">LinkedIn</a>
+            </div>
+          </div>
+          <button class="tool-btn tool-icon" id="btnPrint" title="Yazdır">🖨</button>
+          <button class="tool-btn" id="btnFav" title="Kaydet">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.2L5 21V4a1 1 0 0 1 1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+            <span id="btnFavText">Kaydet</span>
+          </button>
+        </div>
+
         <p class="modal-summary" id="modalSummary"></p>
         <div class="article-loading" id="modalLoading" hidden>
           <div class="spinner"></div>
           <span>Haberin tam metni getiriliyor…</span>
         </div>
         <div class="article-content" id="modalContent"></div>
+
+        <section class="related" id="modalRelated" hidden>
+          <h3 class="related-title">İlgili Haberler</h3>
+          <div class="related-list" id="relatedList"></div>
+        </section>
+
         <p class="modal-author" id="modalAuthor"></p>
         <a class="btn-primary" id="modalLink" href="#" target="_blank" rel="noopener noreferrer">
           Kaynağın sitesinde oku
@@ -191,19 +229,25 @@
     </article>
   </div>
 
+  <!-- Yeni haber bildirimi -->
+  <button class="new-items-pill" id="newItemsPill" hidden>
+    <span class="pill-dot"></span><span id="newItemsText">Yeni haberler</span>
+  </button>
+
   <!-- ===================== FOOTER ===================== -->
   <footer class="site-footer">
     <div class="container footer-grid">
       <div class="footer-brand">
         <div class="brand footer-logo">
           <svg class="brand-mark" viewBox="0 0 48 48" width="38" height="38" aria-hidden="true">
-            <circle cx="24" cy="24" r="21" fill="none" stroke="currentColor" stroke-width="3"/>
-            <path d="M24 7 L29 24 L24 41 L19 24 Z" fill="var(--accent)"/>
-            <circle cx="24" cy="24" r="3.5" fill="currentColor"/>
+            <rect x="2" y="2" width="44" height="44" rx="11" fill="currentColor"/>
+            <circle cx="13.5" cy="24" r="3.1" fill="#16120e"/>
+            <rect x="19.5" y="21" width="10.5" height="6" rx="3" fill="#c1272d"/>
+            <circle cx="35.5" cy="24" r="3.1" fill="#16120e"/>
           </svg>
-          <span class="brand-name">PUSULA</span>
+          <span class="brand-name">TELGRAF</span>
         </div>
-        <p>Dünyanın önde gelen teknoloji ve haber yayınlarından başlıkları tek ekranda toplayan bağımsız haber toplayıcı. Tüm içeriklerin telif hakkı kaynak yayınlarına aittir; her haber orijinal makaleye bağlantı verir.</p>
+        <p>Dünyanın önde gelen teknoloji ve haber yayınlarından başlıkları tek ekranda toplayan bağımsız haber servisi. Tüm içeriklerin telif hakkı kaynak yayınlarına aittir; her haber orijinal makaleye bağlantı verir.</p>
       </div>
       <div>
         <h4>Kategoriler</h4>
@@ -215,17 +259,20 @@
         </ul>
       </div>
       <div>
-        <h4>Teknoloji Kaynakları</h4>
+        <h4>Teknoloji</h4>
         <ul>
           <li><a href="https://www.theverge.com/" target="_blank" rel="noopener">The Verge</a></li>
           <li><a href="https://techcrunch.com/" target="_blank" rel="noopener">TechCrunch</a></li>
           <li><a href="https://www.wired.com/" target="_blank" rel="noopener">WIRED</a></li>
           <li><a href="https://arstechnica.com/" target="_blank" rel="noopener">Ars Technica</a></li>
           <li><a href="https://www.bbc.com/technology" target="_blank" rel="noopener">BBC Technology</a></li>
+          <li><a href="https://www.engadget.com/" target="_blank" rel="noopener">Engadget</a></li>
+          <li><a href="https://venturebeat.com/" target="_blank" rel="noopener">VentureBeat</a></li>
+          <li><a href="https://news.ycombinator.com/" target="_blank" rel="noopener">Hacker News</a></li>
         </ul>
       </div>
       <div>
-        <h4>Dünya Haberleri</h4>
+        <h4>Dünya</h4>
         <ul>
           <li><a href="https://www.bbc.com/news" target="_blank" rel="noopener">BBC News</a></li>
           <li><a href="https://www.reuters.com/" target="_blank" rel="noopener">Reuters</a></li>
@@ -233,16 +280,18 @@
           <li><a href="https://apnews.com/" target="_blank" rel="noopener">AP News</a></li>
           <li><a href="https://www.aljazeera.com/" target="_blank" rel="noopener">Al Jazeera</a></li>
           <li><a href="https://www.nytimes.com/international/" target="_blank" rel="noopener">New York Times</a></li>
+          <li><a href="https://www.france24.com/en/" target="_blank" rel="noopener">France 24</a></li>
+          <li><a href="https://www.dw.com/en/" target="_blank" rel="noopener">DW News</a></li>
         </ul>
       </div>
     </div>
     <div class="footer-bottom">
       <div class="container">
-        <span>© <span id="year"></span> Pusula Haber — Demo proje. Piyasa ve hava verileri bilgilendirme amaçlıdır, yatırım tavsiyesi değildir.</span>
+        <span>© <span id="year"></span> Telgraf — Demo proje. Piyasa ve hava verileri bilgilendirme amaçlıdır, yatırım tavsiyesi değildir.</span>
       </div>
     </div>
   </footer>
 
-  <script src="/js/app.js?v=4" defer></script>
+  <script src="/js/app.js?v=5" defer></script>
 </body>
 </html>
