@@ -8,8 +8,6 @@
 //   5) ekran görüntüsü servisleri (thum.io → mShots) — son çare
 //
 // Google News yönlendirme linkleri gerçek makale URL'sine çözülür (metin + görsel için).
-import { JSDOM } from 'jsdom';
-import { Readability } from '@mozilla/readability';
 import sanitizeHtml from 'sanitize-html';
 import { USER_AGENT } from './config.js';
 import { fetchText } from './rss.js';
@@ -608,6 +606,9 @@ export async function fetchArticle(item) {
 
   // 1) Doğrudan çekim + Readability
   try {
+    // jsdom tembel yüklenir: ortamda bozuksa süreç çökmez, jina katmanına düşer
+    const { JSDOM } = await import('jsdom');
+    const { Readability } = await import('@mozilla/readability');
     const { html, finalUrl } = await fetchHtml(realUrl, 12000);
     const dom = new JSDOM(html, { url: finalUrl });
     const parsed = new Readability(dom.window.document).parse();
