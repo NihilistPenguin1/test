@@ -71,10 +71,22 @@ function getHostState(url) {
   return { host, state: hostState.get(host) };
 }
 
-function withinBudget() {
-  const budget = Number(process.env.TELGRAF_STEALTH_BUDGET || 900000);
-  return budgetSpent < budget;
+function withinBudget(scope = 'article') {
+  const total = Number(process.env.TELGRAF_STEALTH_BUDGET || 1380000);
+  const limits = {
+    image: Number(process.env.TELGRAF_STEALTH_IMAGE_BUDGET || 240000),
+    resolve: Number(process.env.TELGRAF_STEALTH_RESOLVE_BUDGET || 240000),
+    article: Number(process.env.TELGRAF_STEALTH_ARTICLE_BUDGET || 900000),
+  };
+  return budgetSpent < total && (scopeSpent.get(scope) || 0) < (limits[scope] ?? limits.article);
 }
+
+function recordSpent(scope, ms) {
+  budgetSpent += ms;
+  scopeSpent.set(scope, (scopeSpent.get(scope) || 0) + ms);
+}
+
+const scopeSpent = new Map(); // kapsam -> ms (image / article / resolve)
 
 /* ============================================================
    Tarayıcı edinimi
@@ -442,10 +454,11 @@ function releaseSlot() {
 async function stealthFetchHtmlInner(url, host, state, opts) {
   const perUrlBudget = Number(process.env.TELGRAF_STEALTH_TIMEOUT || 45000);
   const quick = state.hardBlocked;
+  const scope = opts.scope || 'article';
   const started = Date.now();
   const deadline = started + Math.min(opts.timeoutMs || perUrlBudget, quick ? 12000 : perUrlBudget);
 
-  if (!withinBudget()) {
+  if (!withinBudget(scope)) {
     stats.budgetSkips++;
     throw new Error('stealth budget exhausted');
   }
@@ -457,7 +470,7 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
   try {
     for (const strategy of strategies) {
       if (Date.now() > deadline) break;
-      if (!withinBudget()) { stats.budgetSkips++; break; }
+      if (!withinBudget(scope)) { stats.budgetSkips++; break; }
       stats.attempts++;
       try {
         const result = await attemptOnce(url, { ...opts, strategy, deadline, host, state, quick });
@@ -466,7 +479,7 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
           state.ok++;
           state.cleared = true;
           state.hardBlocked = false;
-          budgetSpent += Date.now() - started;
+          recordSpent(scope, Date.now() - started);
           return { ...result, strategy };
         }
         lastError = 'challenge remained';
@@ -481,7 +494,7 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
 
   state.fail++;
   if (state.fail >= 3 && !state.ok) state.hardBlocked = true;
-  budgetSpent += Date.now() - started;
+  recordSpent(scope, Date.now() - started);
   throw new Error(`stealth failed (${host}): ${lastError}`);
 }
 
@@ -577,7 +590,7 @@ export async function stealthResolveGoogleNews(url, opts = {}) {
   if (!stealthEnabled()) return '';
   const timeoutMs = opts.timeoutMs || 30000;
   const started = Date.now();
-  if (!withinBudget()) { stats.budgetSkips++; return ''; }
+  if (!withinBudget('resolve')) { stats.budgetSkips++; return ''; }
   try {
     const browser = await getBrowser();
     const page = await browser.newPage();
@@ -613,6 +626,6 @@ export async function stealthResolveGoogleNews(url, opts = {}) {
   } catch {
     return '';
   } finally {
-    budgetSpent += Date.now() - started;
+    recordSpent('resolve', Date.now() - started);
   }
 }

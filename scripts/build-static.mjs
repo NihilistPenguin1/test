@@ -74,16 +74,23 @@ function isStoryLink(link) {
 
 function note(msg) {
   console.log(msg);
-  // GitHub Actions annotation'ı — log erişimi olmasa da API'den okunur
+  // GitHub Actions annotation'ı — log erişimi olmasa da API'den okunur.
+  // NOT: adımda başına ~10 not düşer; bu yüzden derleme en fazla 5 konsolide not yayar.
   if (process.env.GITHUB_ACTIONS) {
     console.log(`::notice title=TELGRAF derleme::${String(msg).replace(/%/g, '%25').replace(/\r?\n/g, '%0A')}`);
   }
 }
 
+async function writeStepSummary(text) {
+  if (!process.env.GITHUB_STEP_SUMMARY) return;
+  const { appendFile } = await import('node:fs/promises');
+  await appendFile(process.env.GITHUB_STEP_SUMMARY, `\n${text}\n`);
+}
+
 let stageStartedAt = 0;
 function noteStage(name) {
   const seconds = ((Date.now() - stageStartedAt) / 1000).toFixed(1);
-  note(`zamanlama ${name}: ${seconds} sn`);
+  console.log(`zamanlama ${name}: ${seconds} sn`);
   stageStartedAt = Date.now();
 }
 
@@ -97,41 +104,43 @@ async function main() {
   // Haberler (31 feed, canlı + seed karışımı)
   const news = await getNews({ force: true });
   const items = news.items;
-  note(`haber: ${items.length} (live=${news.live}, hata=${news.errors?.length || 0})`);
+  console.log(`haber: ${items.length} (live=${news.live}, hata=${news.errors?.length || 0})`);
   noteStage('haber çekimi');
 
   // Google News linklerini TOPLU çöz (Reuters/AP vb. gerçek makale URL'sine)
+  let gnBatch = 0;
   try {
     const resolved = await resolveGoogleBatch(items.map((i) => i.link).filter(Boolean));
-    let n = 0;
     for (const it of items) {
       const real = resolved.get(it.link);
       if (real && real !== it.link && isArticleUrl(real) && isExpectedPublisherUrl(it.source, real)) {
         it.link = real;
-        n++;
+        gnBatch++;
       }
     }
-    console.log(`  google news çözümü: ${n} link gerçek makaleye yönlendirildi`);
+    console.log(`  google news çözümü: ${gnBatch} link gerçek makaleye yönlendirildi`);
   } catch (e) {
     console.log(`  google news çözümü başarısız: ${e.message}`);
   }
   // 2) Kalan Google News linklerini stealth tarayıcıyla çöz
+  let gnStealth = 0;
+  let gnStill = 0;
   {
     const still = items.filter((it) => isGoogleNewsArticleUrl(it.link));
+    gnStill = still.length;
     if (still.length) {
-      note(`google news kalan: ${still.length} link tarayıcıyla çözülecek`);
+      console.log(`google news kalan: ${still.length} link tarayıcıyla çözülecek`);
       const { stealthResolveGoogleNews } = await import('../server/stealth.js');
-      let n = 0;
       await mapLimit(still, 4, async (it) => {
         try {
           const real = await stealthResolveGoogleNews(it.link);
           if (real && isArticleUrl(real) && isExpectedPublisherUrl(it.source, real)) {
             it.link = real;
-            n++;
+            gnStealth++;
           }
         } catch { /* yedek bağlantıda kalır */ }
       });
-      note(`google news stealth çözümü: ${n}/${still.length} link gerçek makaleye yönlendirildi`);
+      console.log(`google news stealth çözümü: ${gnStealth}/${still.length} link gerçek makaleye yönlendirildi`);
     }
   }
   noteStage('Google News çözümü');
@@ -151,7 +160,7 @@ async function main() {
     && isExpectedPublisherUrl(it.source, it.link)).length;
   const googleFallbacks = publisherItems.filter((it) => isGoogleNewsArticleUrl(it.link)).length;
   const publisherMismatches = publisherItems.length - publisherMatched - googleFallbacks;
-  note(`AP/Reuters yayıncı link denetimi: toplam=${publisherItems.length}, eşleşen=${publisherMatched}, Google News yedeği=${googleFallbacks}, alan adı uyuşmazlığı=${publisherMismatches}`);
+  note(`kaynaklar: haber=${items.length} (live=${news.live}, feed-hata=${news.errors?.length || 0}) · google-news: batch=${gnBatch}, stealth=${gnStealth}/${gnStill} · AP/Reuters: toplam=${publisherItems.length} eşleşen=${publisherMatched} yedek=${googleFallbacks} uyuşmazlık=${publisherMismatches}`);
 
   // Eksik kapak görsellerini challenge-duyarlı görsel motoruyla tamamla (HEPSİ)
   try {
@@ -160,9 +169,8 @@ async function main() {
     console.log(`  görsel zenginleştirme hatası: ${e.message}`);
   }
   const withImg = items.filter((i) => i.image).length;
-  note(`kapak görseli: ${withImg}/${items.length}`);
   const imageAudit = await auditImageUrls(items);
-  note(`görsel denetimi (benzersiz URL; kart=${withImg}/${items.length}): toplam=${imageAudit.total}, doğrudan=${imageAudit.direct}, screenshot-proxy=${imageAudit.screenshot}, doğrulanan=${imageAudit.verified}, HTTP-hatası=${imageAudit.httpFailures}, görsel-olmayan=${imageAudit.nonImageResponses}, istek-hatası=${imageAudit.requestFailures}`);
+  note(`görsel: kart=${withImg}/${items.length} · denetim: doğrulanan=${imageAudit.verified}/${imageAudit.direct}, HTTP-hata=${imageAudit.httpFailures}, görsel-değil=${imageAudit.nonImageResponses}, istek-hata=${imageAudit.requestFailures}`);
   noteStage('görsel zenginleştirme ve denetim');
 
   // Derlemeyi kısa tutmak ve kaynakları yormamak için en yeni 300 haberin tam metnini üret.
@@ -195,7 +203,6 @@ async function main() {
       console.log(`  tam metin yok (${it.id}): ${String(e.message).slice(0, 80)}`);
     }
   });
-  note(`tam metin: ${fullOk}/${fullTextItems.length} denenen (en yeni ${fullTextItems.length}/${items.length})`);
   const hostSummary = [...hostStats.entries()]
     .sort((a, b) => (b[1].fail - a[1].fail) || (b[1].ok + b[1].fail) - (a[1].ok + a[1].fail))
     .map(([h, s]) => {
@@ -204,7 +211,7 @@ async function main() {
       return `${h}: ${s.ok}/${s.ok + s.fail}${via}${why}`;
     })
     .join(' · ');
-  note(`tam metin kaynak özeti: ${hostSummary || 'veri yok'}`);
+  note(`tam metin: ${fullOk}/${fullTextItems.length} denenen (en yeni ${fullTextItems.length}/${items.length}) · ${hostSummary}`);
   noteStage('tam metinler');
 
   // Piyasa + hava (sunucu tarafında çekim — tarayıcı CORS sorunu yok)
@@ -213,16 +220,34 @@ async function main() {
     getWeatherData().catch((e) => ({ live: false, error: e.message })),
   ]);
   const marketSamples = (market.items || []).filter((m) => m.sample).map((m) => m.key);
-  note(`piyasa: ${market.items?.length || 0} kalem (live=${market.live}, örnek=${marketSamples.join(',') || 'yok'}) · hava (live=${weather.live})`);
+  console.log(`piyasa: ${market.items?.length || 0} kalem (live=${market.live}, örnek=${marketSamples.join(',') || 'yok'}) · hava (live=${weather.live})`);
   noteStage('piyasa ve hava');
 
-  // Stealth tarayıcı teşhisi
+  // Stealth tarayıcı teşhisi + kapanış notu + adım özeti (ayrıntılı rapor)
+  let stealthLine = 'stealth: kapalı';
   try {
     const { stealthStats, closeStealth } = await import('../server/stealth.js');
     const s = stealthStats();
-    note(`stealth: denenen=${s.attempts}, başarılı=${s.successes}, challenge=${s.challengeSeen}, geçen=${s.challengeCleared}, bütçe=${Math.round(s.budgetSpentMs / 1000)}sn, duvarlı-host=${s.hosts.filter((h) => h.hardBlocked).map((h) => h.host).join(',') || 'yok'}`);
+    stealthLine = `stealth: denenen=${s.attempts} başarılı=${s.successes} challenge=${s.challengeSeen} geçen=${s.challengeCleared} bütçe=${Math.round(s.budgetSpentMs / 1000)}sn duvarlı=${s.hosts.filter((h) => h.hardBlocked).map((h) => h.host).join(',') || 'yok'}`;
     await closeStealth();
   } catch { /* stealth kapalı olabilir */ }
+  note(`özet: piyasa=${market.items?.length || 0}kalem(live=${market.live}) hava(live=${weather.live}) · ${stealthLine} · süre=${Math.round((Date.now() - t0) / 1000)}sn`);
+  await writeStepSummary([
+    '## TELGRAF derleme raporu',
+    '',
+    `| Alan | Değer |`,
+    `|---|---|`,
+    `| Haber | ${items.length} (live=${news.live}, feed-hata=${news.errors?.length || 0}) |`,
+    `| Google News | batch=${gnBatch}, stealth=${gnStealth}/${gnStill} |`,
+    `| Kapak görseli | ${withImg}/${items.length} |`,
+    `| Tam metin | ${fullOk}/${fullTextItems.length} |`,
+    `| Piyasa / Hava | live=${market.live} / live=${weather.live} |`,
+    `| Süre | ${Math.round((Date.now() - t0) / 1000)} sn |`,
+    '',
+    `**Stealth:** ${stealthLine}`,
+    '',
+    `**Kaynak bazlı tam metin:** ${hostSummary || 'veri yok'}`,
+  ].join('\n'));
 
   /* ---------- 2) dist/ ağacını kur (tek seferde) ---------- */
 

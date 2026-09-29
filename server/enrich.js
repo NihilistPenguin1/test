@@ -533,7 +533,7 @@ export async function extractOgImage(link, sourceId = '') {
   // 2) Challenge/blok durumunda stealth tarayıcı ile görsel arama
   if (!img && blocked && stealthEnabled()) {
     try {
-      const page = await stealthFetchHtml(realUrl);
+      const page = await stealthFetchHtml(realUrl, { scope: 'image', timeoutMs: 20000 });
       if (isExpectedPublisherUrl(sourceId, page.finalUrl)) img = pickBestImage(page.html, page.finalUrl);
       else blocked = true;
     } catch { /* sonraki katmana düş */ }
