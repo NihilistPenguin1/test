@@ -783,7 +783,9 @@ async function attemptOnce(url, { strategy, deadline, host, state, quick, waitUn
 
       // Kritik: yalnız İÇERİK İNCE ise challenge sayfası sayılır. Haber metni
       // "verify you are human" gibi kalıpları içerebilir; o sayfalar çözülmüş sayılır.
+      let sawChallenge = false;
       if (textLen < 500 && (markers.length || looksLikeChallenge(body, title))) {
+        sawChallenge = true;
         if (quick) return null; // duvarlı hostta çözme denemesi yapma
         const outcome = await attemptChallengePass(page, deadline);
         if (outcome !== 'cleared') {
@@ -823,6 +825,11 @@ async function attemptOnce(url, { strategy, deadline, host, state, quick, waitUn
       const finalUrl = page.url();
       const text = body.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
       if (body && text.length >= 400 && !looksLikeChallenge(body, title)) {
+        // Duvar görüldüyse ve artık gerçek içerik alınıyorsa challenge geçilmiş
+        // sayılır — yeniden-istek ya da URL çeşitlemesiyle gelmesi fark etmez.
+        // (Eskiden yalnızca bekleme turundaki geçiş sayılıyordu; CI notunda
+        //  25 AP haberi tarayıcıyla alınmışken "geçen=0" görünüyordu.)
+        if (sawChallenge) stats.challengeCleared++;
         try { await page.close(); } catch { /* yoksay */ }
         return { html: body, finalUrl, title };
       }

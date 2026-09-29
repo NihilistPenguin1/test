@@ -170,8 +170,13 @@ test('gives up on an unpassable challenge but keeps stats', async () => {
 test('re-requests the article when the challenge clears without a page reload', async () => {
   // Farklı ana ad = taze çerez kavanozu (profil diğer testlerde ısındı)
   const clean = ctx.base.replace('127.0.0.1', 'localhost');
+  const before = stealthStats().challengeCleared;
   const page = await stealthFetchHtml(`${clean}/reload`, { timeoutMs: 25000 });
   assert.match(page.html, /Yeniden Istekli Makale/);
+  assert.ok(
+    stealthStats().challengeCleared > before,
+    'yeniden-istekle alınan içerik de çözülme sayılmalı (CI notunda geçen=0 yanıltıcıydı)',
+  );
   assert.ok(ctx.hits.get('/reload') >= 2, `doğrulama sonrası yeniden istek bekleniyordu, görülen: ${ctx.hits.get('/reload')}`);
 });
 
