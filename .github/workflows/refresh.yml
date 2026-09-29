@@ -12,6 +12,7 @@ on:
     branches:
       - main
       - arena/01a0e8f9-test
+      - arena/01a0ec10-test
 
 permissions:
   contents: read
@@ -36,6 +37,9 @@ jobs:
 
       - name: Bağımlılıklar
         run: npm ci
+
+      - name: Birim testleri
+        run: npm test
 
       - name: Statik siteyi üret (haber + kapak görselleri + tam metin + piyasa + hava)
         run: node scripts/build-static.mjs

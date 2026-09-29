@@ -15,6 +15,19 @@ const seed = JSON.parse(fs.readFileSync(SEED_PATH, 'utf8'));
 
 let newsCache = { at: 0, items: null, live: false, errors: [] };
 
+async function mapLimit(values, limit, fn) {
+  const out = new Array(values.length);
+  let next = 0;
+  async function worker() {
+    while (next < values.length) {
+      const index = next++;
+      out[index] = await fn(values[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, worker));
+  return out;
+}
+
 function mergeItems(...lists) {
   const seen = new Set();
   const out = [];
@@ -35,17 +48,15 @@ export async function getNews({ force = false } = {}) {
     return { items: newsCache.items, live: newsCache.live, errors: newsCache.errors, fetchedAt: new Date(newsCache.at).toISOString() };
   }
 
-  const jobs = [];
-  for (const source of SOURCES) {
-    for (const feed of source.feeds) {
-      jobs.push(
-        fetchFeed(feed, source)
-          .then((items) => ({ ok: true, items }))
-          .catch((e) => ({ ok: false, err: `${source.id}: ${e.message}`, items: [] }))
-      );
+  const feeds = SOURCES.flatMap((source) => source.feeds.map((feed) => ({ source, feed })));
+  // Feed sağlayıcılarına ölçülü yük: en fazla on eşzamanlı indirme.
+  const results = await mapLimit(feeds, 10, async ({ source, feed }) => {
+    try {
+      return { ok: true, items: await fetchFeed(feed, source) };
+    } catch (e) {
+      return { ok: false, err: `${source.id}: ${e.message}`, items: [] };
     }
-  }
-  const results = await Promise.all(jobs);
+  });
   const errors = results.filter((r) => !r.ok).map((r) => r.err);
   const liveItems = mergeItems(...results.map((r) => r.items));
 

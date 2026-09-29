@@ -1,15 +1,15 @@
-// Görsel zenginleştirme + tam metin çıkarma (5 katmanlı, derinlemesine)
+// Görsel zenginleştirme + tam metin çıkarma (challenge duyarlı, sınırlı yedeklerle)
 //
 // GÖRSEL katmanları:
 //   1) feed görseli (çağıran yerde)
 //   2) sayfa analizi: og:image / twitter:image / JSON-LD / içerik görseli
 //   3) WordPress oEmbed thumbnail_url (TechCrunch, Ars ve WP tabanlı siteler)
-//   4) r.jina.ai ilk görsel (bot korumalı siteler + Google News yönlendirmesi)
-//   5) ekran görüntüsü servisleri (thum.io → mShots) — son çare
+//   4) r.jina.ai ilk görsel (yalnızca challenge yanıtı olmayan sayfalarda)
+// Challenge/403/429 yanıtlarında alternatif erişim ve ekran görüntüsü proxy'si denenmez.
 //
 // Google News yönlendirme linkleri gerçek makale URL'sine çözülür (metin + görsel için).
 import sanitizeHtml from 'sanitize-html';
-import { USER_AGENT } from './config.js';
+import { USER_AGENT, SOURCE_BY_ID } from './config.js';
 import { fetchText } from './rss.js';
 
 const JINA_PREFIX = 'https://r.jina.ai/';
@@ -34,7 +34,11 @@ async function fetchHtml(url, timeoutMs = 9000) {
         'Accept-Language': 'en-US,en;q=0.9,tr;q=0.8',
       },
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      const error = new Error(`HTTP ${res.status}`);
+      error.status = res.status;
+      throw error;
+    }
     return { html: await res.text(), finalUrl: res.url || url };
   } finally {
     clearTimeout(t);
@@ -60,6 +64,31 @@ async function fetchJina(url, timeoutMs = 15000) {
    1) Google News yönlendirme çözümü
    ============================================================ */
 const isGoogleHost = (h) => /(?:^|\.)(google|googleapis|gstatic|googleusercontent|ggpht|youtube|ytimg|blogger|blogspot)\./i.test(h);
+
+/** Tanımlı erişim challenge'larını içerikten saptar; challenge'ı çözmeye çalışmaz. */
+export function isChallengeResponse(body) {
+  const text = String(body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  return /performing security verification|verifying the device|verify (?:that )?you are human|checking your browser|security check\s*[-–—:]?\s*please wait|complete the security check/i.test(text);
+}
+
+/** Yalnız AP ve Reuters Google News çözümlerinde yayıncı alan adı eşleşmesi zorunludur. */
+export function isExpectedPublisherUrl(sourceId, value) {
+  if (!['ap', 'reuters'].includes(sourceId)) return true;
+  try {
+    const parsed = new URL(value);
+    const expected = String(SOURCE_BY_ID[sourceId]?.domain || '').toLowerCase();
+    const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
+    return /^https?:$/.test(parsed.protocol) && !!expected
+      && (host === expected || host.endsWith(`.${expected}`));
+  } catch { return false; }
+}
+
+export function isScreenshotServiceUrl(value) {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === 'image.thum.io' || host === 's.wordpress.com';
+  } catch { return false; }
+}
 
 export function isArticleUrl(value) {
   try {
@@ -116,6 +145,10 @@ function findRedirectTarget(html) {
 
 const decodeParamsCache = new Map(); // article id -> {direct|sig+ts}
 
+export function isGoogleNewsArticleUrl(value) {
+  return Boolean(googleArticleId(value));
+}
+
 /**
  * Google News makale sayfasından imza (data-n-a-sg) + zaman damgası (data-n-a-ts)
  * çıkarır. Bu ikili, batchexecute RPC ile gerçek URL'yi almak için gereklidir.
@@ -129,6 +162,10 @@ async function getDecodeParams(id) {
   ]) {
     try {
       const { html } = await fetchHtml(u, 12000);
+      if (isChallengeResponse(html)) {
+        out = { id, challenge: true };
+        break;
+      }
       const direct = findRedirectTarget(html);
       if (direct && isArticleUrl(direct)) {
         out = { id, direct };
@@ -140,7 +177,12 @@ async function getDecodeParams(id) {
         out = { id, sig: sg, ts };
         break;
       }
-    } catch { /* sonraki */ }
+    } catch (error) {
+      if ([403, 429].includes(error.status)) {
+        out = { id, challenge: true };
+        break;
+      }
+    }
   }
   decodeParamsCache.set(id, out);
   return out;
@@ -200,17 +242,11 @@ export async function resolveGoogleBatch(urls) {
       continue;
     }
     if (!pending.some((p) => p.id === id)) pending.push({ url, id });
-    else pending.push({ url, id: pending.find((p) => p.id === id).id });
   }
   if (!pending.length) return out;
 
-  // 1) İmza + zaman damgaları (hafif GET'ler; aralarında kısa bekleme)
-  const params = [];
-  for (const p of pending) {
-    const pr = await getDecodeParams(p.id);
-    params.push({ ...p, ...pr });
-    await sleep(120);
-  }
+  // 1) İmza + zaman damgaları: küçük, sınırlı eşzamanlılık (3 GET).
+  const params = await mapLimit(pending, 8, async (p) => ({ ...p, ...(await getDecodeParams(p.id)) }));
 
   // 2) Doğrudan dönenleri yaz; imzalıları tek POST'a koy
   const needBatch = [];
@@ -219,7 +255,7 @@ export async function resolveGoogleBatch(urls) {
       googleUrlCache.set(p.url, p.direct);
       googleUrlCache.set(p.id, p.direct);
       out.set(p.url, p.direct);
-    } else if (p.sig && p.ts && !needBatch.some((x) => x.id === p.id)) {
+    } else if (!p.challenge && p.sig && p.ts && !needBatch.some((x) => x.id === p.id)) {
       needBatch.push(p);
     }
   }
@@ -264,7 +300,7 @@ export async function resolveGoogleBatch(urls) {
   }
 
   // 3) Hâlâ çözülmemişlere imzasız zarf (eski yöntem)
-  const still = params.filter((p) => !out.has(p.url) && !p.direct);
+  const still = params.filter((p) => !out.has(p.url) && !p.direct && !p.challenge);
   const uniqStill = still.filter((p, i) => still.findIndex((x) => x.id === p.id) === i);
   if (uniqStill.length) {
     const nosigRows = uniqStill.map((p) => [
@@ -283,7 +319,7 @@ export async function resolveGoogleBatch(urls) {
           out.set(p.url, real);
         }
       });
-    } catch { /* jina katmanı dener */ }
+    } catch { /* imzasız zarf */ }
   }
 
   // Eşlemediyse bile orijinal URL'yi sonuçta göster (tekrar tekrar denemesin)
@@ -301,8 +337,11 @@ export async function resolveArticleUrl(url) {
   try {
     const map = await resolveGoogleBatch([url]);
     if (map.get(url)) return map.get(url);
-    // Son çare: jina JS ile yönlendirmeyi takip eder ve sayfayı render eder
+    const id = googleArticleId(url);
+    if (decodeParamsCache.get(id)?.challenge) return url;
+    // Yalnız challenge olmayan yanıtlar için metin tabanlı URL çözümlemesi
     const md = await fetchJina(url, 18000);
+    if (isChallengeResponse(md)) return url;
     const m = md.match(/^URL Source:\s*(https?:\/\/\S+)/m);
     if (m && isArticleUrl(m[1])) {
       googleUrlCache.set(url, m[1]);
@@ -431,47 +470,38 @@ function firstMarkdownImage(md) {
   return best || '';
 }
 
-/* ---------- Ekran görüntüsü servisleri (son çare) ---------- */
-export function thumUrl(link) {
-  return `https://image.thum.io/get/width/1200/crop/675/noanimate/${link}`;
-}
-export function mshotUrl(link) {
-  return `https://s.wordpress.com/mshots/v1/${encodeURIComponent(link)}?w=1200&h=675`;
-}
-
-async function screenshotUrl(link) {
-  // thum.io'yu hafifçe yokla (bu aynı zamanda ekran görüntüsünü hazırlar);
-  // cevap yoksa mShots'a düş
-  try {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 9000);
-    const res = await fetch(thumUrl(link), { method: 'GET', signal: ac.signal });
-    clearTimeout(t);
-    if (res.ok && (res.headers.get('content-type') || '').includes('image')) return thumUrl(link);
-  } catch { /* sonraki */ }
-  return mshotUrl(link);
-}
-
 /* ============================================================
-   Ana görsel çözücü (5 katman)
+   Ana görsel çözücü — challenge veya rate-limit yanıtında durur.
+   Feed'den gelen doğrudan görseller çağıran tarafta korunur.
    ============================================================ */
-export async function extractOgImage(link) {
-  if (ogCache.has(link)) return ogCache.get(link);
+export async function extractOgImage(link, sourceId = '') {
+  const cacheKey = `${sourceId}:${link}`;
+  if (ogCache.has(cacheKey)) return ogCache.get(cacheKey);
+  if (!isGoogleNewsArticleUrl(link) && !isExpectedPublisherUrl(sourceId, link)) {
+    ogCache.set(cacheKey, '');
+    return '';
+  }
   let img = '';
   let realUrl = link;
+  let blocked = false;
   try {
-    realUrl = await resolveArticleUrl(link);
+    const resolvedUrl = await resolveArticleUrl(link);
+    realUrl = isExpectedPublisherUrl(sourceId, resolvedUrl) ? resolvedUrl : link;
     const { html, finalUrl } = await fetchHtml(realUrl, 10000);
-    img = pickBestImage(html, finalUrl);
-  } catch { /* sonraki katman */ }
-  if (!img) img = await oembedImage(realUrl);
-  if (!img) {
-    try {
-      img = firstMarkdownImage(await fetchJina(realUrl, 14000));
-    } catch { /* sonraki katman */ }
+    blocked = isChallengeResponse(html) || !isExpectedPublisherUrl(sourceId, finalUrl);
+    if (!blocked) img = pickBestImage(html, finalUrl);
+  } catch (error) {
+    blocked = [403, 429].includes(error.status);
   }
-  if (!img) img = await screenshotUrl(realUrl);
-  ogCache.set(link, img);
+  if (!img && !blocked) img = await oembedImage(realUrl);
+  if (!img && !blocked) {
+    try {
+      const md = await fetchJina(realUrl, 14000);
+      if (!isChallengeResponse(md)) img = firstMarkdownImage(md);
+    } catch { /* yalnız challenge olmayan yanıtlar denenir */ }
+  }
+  // Ekran görüntüsü proxy'leri kullanılmaz: challenge içeriğini görsel gibi göstermeyiz.
+  ogCache.set(cacheKey, img);
   return img;
 }
 
@@ -501,13 +531,13 @@ export async function enrichImages(items, max = 24, concurrency = 8) {
       const map = await resolveGoogleBatch(googleItems.map((it) => it.link));
       for (const it of googleItems) {
         const real = map.get(it.link);
-        if (real && isArticleUrl(real)) it.link = real;
+        if (real && isArticleUrl(real) && isExpectedPublisherUrl(it.source, real)) it.link = real;
       }
     }
   } catch { /* bireysel katmanlar dener */ }
 
   await mapLimit(targets, concurrency, async (it) => {
-    const img = await extractOgImage(it.link);
+    const img = await extractOgImage(it.link, it.source);
     if (img) it.image = img;
     return it;
   });
@@ -615,9 +645,13 @@ function parseJinaMeta(md) {
 export async function fetchArticle(item) {
   const cached = articleCache.get(item.id);
   if (cached && Date.now() - cached.at < ARTICLE_TTL) return cached.data;
+  if (!isGoogleNewsArticleUrl(item.link) && !isExpectedPublisherUrl(item.source, item.link)) {
+    throw new Error('publisher link does not match the card source');
+  }
 
-  // Google News linklerini gerçek makaleye çevir (Reuters/AP vb.)
-  const realUrl = await resolveArticleUrl(item.link);
+  // Google News çözümünü yalnız yayıncı alan adıyla eşleşiyorsa kullan.
+  const resolvedUrl = await resolveArticleUrl(item.link);
+  const realUrl = isExpectedPublisherUrl(item.source, resolvedUrl) ? resolvedUrl : item.link;
 
   // 1) Doğrudan çekim + Readability
   try {
@@ -625,6 +659,16 @@ export async function fetchArticle(item) {
     const { JSDOM } = await import('jsdom');
     const { Readability } = await import('@mozilla/readability');
     const { html, finalUrl } = await fetchHtml(realUrl, 12000);
+    if (isChallengeResponse(html)) {
+      const error = new Error('publisher returned a security challenge');
+      error.challenge = true;
+      throw error;
+    }
+    if (!isExpectedPublisherUrl(item.source, finalUrl)) {
+      const error = new Error('publisher redirect did not match the card source');
+      error.sourceMismatch = true;
+      throw error;
+    }
     const dom = new JSDOM(html, { url: finalUrl });
     const parsed = new Readability(dom.window.document).parse();
     const text = (parsed?.textContent || '').replace(/\s+/g, ' ').trim();
@@ -650,9 +694,14 @@ export async function fetchArticle(item) {
     }
     throw new Error('content too short / challenge page');
   } catch (e) {
-    // 2) r.jina.ai — bot korumalarını ve JS yönlendirmelerini aşar
+    // Challenge ve açık blok yanıtlarında başka bir erişim yolu denenmez.
+    if (e.challenge || e.sourceMismatch || [403, 429].includes(e.status)) {
+      throw new Error(`${e.message}; publisher challenge/block/source mismatch left untouched`);
+    }
+    // 2) Metin yedeği yalnız challenge olmayan yanıtlar için denenir.
     try {
       const md = await fetchJina(realUrl, 18000);
+      if (isChallengeResponse(md)) throw new Error('text fallback returned a security challenge');
       const meta = parseJinaMeta(md);
       const contentHtml = sanitizeContent(mdToHtml(md));
       const text = md.replace(/[#*_>`\[\]()!]/g, ' ').replace(/\s+/g, ' ').trim();

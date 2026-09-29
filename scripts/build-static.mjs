@@ -6,12 +6,13 @@ import { mkdir, writeFile, cp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getNews, getMarketData, getWeatherData } from '../server/store.js';
-import { enrichImages, fetchArticle, resolveGoogleBatch, isArticleUrl } from '../server/enrich.js';
+import { enrichImages, fetchArticle, resolveGoogleBatch, isArticleUrl, isExpectedPublisherUrl, isGoogleNewsArticleUrl, isScreenshotServiceUrl } from '../server/enrich.js';
 import { SOURCES, CATEGORIES } from '../server/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
+const FULL_TEXT_BUILD_LIMIT = 300;
 
 function mapLimit(arr, limit, fn) {
   const out = new Array(arr.length);
@@ -23,6 +24,42 @@ function mapLimit(arr, limit, fn) {
     }
   }
   return Promise.all(Array.from({ length: Math.min(limit, arr.length) }, worker)).then(() => out);
+}
+
+async function auditImageUrls(items) {
+  const urls = [...new Set(items.map((item) => item.image).filter((url) => /^https?:\/\//i.test(url || '')))];
+  const screenshot = urls.filter(isScreenshotServiceUrl).length;
+  const directUrls = urls.filter((url) => !isScreenshotServiceUrl(url));
+  let verified = 0;
+  let httpFailures = 0;
+  let nonImageResponses = 0;
+  let requestFailures = 0;
+  await mapLimit(directUrls, 24, async (url) => {
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: { Range: 'bytes=0-0' },
+        signal: AbortSignal.timeout(4000),
+      });
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok) httpFailures++;
+      else if (/^image\//i.test(contentType)) verified++;
+      else nonImageResponses++;
+    } catch {
+      requestFailures++;
+    } finally {
+      try { await response?.body?.cancel(); } catch { /* gövde zaten kapanmış olabilir */ }
+    }
+  });
+  return {
+    total: urls.length,
+    direct: directUrls.length,
+    screenshot,
+    verified,
+    httpFailures,
+    nonImageResponses,
+    requestFailures,
+  };
 }
 
 const fullName = (id) => `${encodeURIComponent(id)}.json`;
@@ -43,8 +80,16 @@ function note(msg) {
   }
 }
 
+let stageStartedAt = 0;
+function noteStage(name) {
+  const seconds = ((Date.now() - stageStartedAt) / 1000).toFixed(1);
+  note(`zamanlama ${name}: ${seconds} sn`);
+  stageStartedAt = Date.now();
+}
+
 async function main() {
   const t0 = Date.now();
+  stageStartedAt = t0;
   console.log('▶ TELGRAF statik derleme başladı');
 
   /* ---------- 1) Topla (bellekte) ---------- */
@@ -53,6 +98,7 @@ async function main() {
   const news = await getNews({ force: true });
   const items = news.items;
   note(`haber: ${items.length} (live=${news.live}, hata=${news.errors?.length || 0})`);
+  noteStage('haber çekimi');
 
   // Google News linklerini TOPLU çöz (Reuters/AP vb. gerçek makale URL'sine)
   try {
@@ -60,7 +106,7 @@ async function main() {
     let n = 0;
     for (const it of items) {
       const real = resolved.get(it.link);
-      if (real && real !== it.link && isArticleUrl(real)) {
+      if (real && real !== it.link && isArticleUrl(real) && isExpectedPublisherUrl(it.source, real)) {
         it.link = real;
         n++;
       }
@@ -69,28 +115,43 @@ async function main() {
   } catch (e) {
     console.log(`  google news çözümü başarısız: ${e.message}`);
   }
+  noteStage('Google News çözümü');
 
-  // Google CSS/asset gibi kazara çözülen veya bozuk RSS linklerini yayına sokma.
-  const badLinks = items.filter((it) => !isStoryLink(it.link));
+  // Bozuk ve AP/Reuters yayıncı alan adıyla uyuşmayan doğrudan linkleri yayına sokma.
+  const badLinks = items.filter((it) => !isStoryLink(it.link)
+    || (['ap', 'reuters'].includes(it.source)
+      && !isGoogleNewsArticleUrl(it.link)
+      && !isExpectedPublisherUrl(it.source, it.link)));
   if (badLinks.length) {
     const badIds = new Set(badLinks.map((it) => it.id));
     for (let i = items.length - 1; i >= 0; i--) if (badIds.has(items[i].id)) items.splice(i, 1);
   }
   note(`makale bağlantıları: ${items.length} geçerli, ${badLinks.length} hatalı kayıt ayıklandı`);
+  const publisherItems = items.filter((it) => ['ap', 'reuters'].includes(it.source));
+  const publisherMatched = publisherItems.filter((it) => !isGoogleNewsArticleUrl(it.link)
+    && isExpectedPublisherUrl(it.source, it.link)).length;
+  const googleFallbacks = publisherItems.filter((it) => isGoogleNewsArticleUrl(it.link)).length;
+  const publisherMismatches = publisherItems.length - publisherMatched - googleFallbacks;
+  note(`AP/Reuters yayıncı link denetimi: toplam=${publisherItems.length}, eşleşen=${publisherMatched}, Google News yedeği=${googleFallbacks}, alan adı uyuşmazlığı=${publisherMismatches}`);
 
-  // Eksik kapak görsellerini 5 katmanlı motorla tamamla (HEPSİ)
+  // Eksik kapak görsellerini challenge-duyarlı görsel motoruyla tamamla (HEPSİ)
   try {
-    await enrichImages(items, 5000, 6);
+    await enrichImages(items, 5000, 8);
   } catch (e) {
     console.log(`  görsel zenginleştirme hatası: ${e.message}`);
   }
   const withImg = items.filter((i) => i.image).length;
   note(`kapak görseli: ${withImg}/${items.length}`);
+  const imageAudit = await auditImageUrls(items);
+  note(`görsel denetimi (benzersiz URL; kart=${withImg}/${items.length}): toplam=${imageAudit.total}, doğrudan=${imageAudit.direct}, screenshot-proxy=${imageAudit.screenshot}, doğrulanan=${imageAudit.verified}, HTTP-hatası=${imageAudit.httpFailures}, görsel-olmayan=${imageAudit.nonImageResponses}, istek-hatası=${imageAudit.requestFailures}`);
+  noteStage('görsel zenginleştirme ve denetim');
 
-  // Tam metinler (modal'da sitede okuma) — paralel, habere özel dayanıklılık
+  // Derlemeyi kısa tutmak ve kaynakları yormamak için en yeni 300 haberin tam metnini üret.
+  // Daha eski haberler kartta kalır; okuyucu kaynak yayına gidebilir.
+  const fullTextItems = items.slice(0, FULL_TEXT_BUILD_LIMIT);
   let fullOk = 0;
   const fullDocs = [];
-  await mapLimit(items, 3, async (it) => {
+  await mapLimit(fullTextItems, 10, async (it) => {
     try {
       const article = await fetchArticle(it);
       if (article?.content) {
@@ -101,7 +162,8 @@ async function main() {
       console.log(`  tam metin yok (${it.id}): ${String(e.message).slice(0, 80)}`);
     }
   });
-  note(`tam metin: ${fullOk}/${items.length}`);
+  note(`tam metin: ${fullOk}/${fullTextItems.length} denenen (en yeni ${fullTextItems.length}/${items.length})`);
+  noteStage('tam metinler');
 
   // Piyasa + hava (sunucu tarafında çekim — tarayıcı CORS sorunu yok)
   const [market, weather] = await Promise.all([
@@ -110,6 +172,7 @@ async function main() {
   ]);
   const marketSamples = (market.items || []).filter((m) => m.sample).map((m) => m.key);
   note(`piyasa: ${market.items?.length || 0} kalem (live=${market.live}, örnek=${marketSamples.join(',') || 'yok'}) · hava (live=${weather.live})`);
+  noteStage('piyasa ve hava');
 
   /* ---------- 2) dist/ ağacını kur (tek seferde) ---------- */
 
@@ -140,11 +203,14 @@ async function main() {
     durationMs: Date.now() - t0,
     news: items.length,
     withImage: withImg,
+    imageAudit,
+    fullTextRequested: fullTextItems.length,
     fullTexts: fullOk,
     marketLive: !!market.live,
     weatherLive: !!weather.live,
   }, null, 2));
 
+  noteStage('statik dosyalar');
   console.log(`✔ dist/ hazır (${Math.round((Date.now() - t0) / 1000)} sn)`);
 }
 
