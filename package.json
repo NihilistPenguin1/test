@@ -7,6 +7,7 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
+    "test": "node --test",
     "build": "node scripts/build-static.mjs"
   },
   "dependencies": {

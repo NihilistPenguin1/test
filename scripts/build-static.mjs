@@ -6,7 +6,7 @@ import { mkdir, writeFile, cp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getNews, getMarketData, getWeatherData } from '../server/store.js';
-import { enrichImages, fetchArticle, resolveGoogleBatch, isArticleUrl } from '../server/enrich.js';
+import { enrichImages, fetchArticle, resolveGoogleBatch, isArticleUrl, isExpectedPublisherUrl, isScreenshotServiceUrl } from '../server/enrich.js';
 import { SOURCES, CATEGORIES } from '../server/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -23,6 +23,42 @@ function mapLimit(arr, limit, fn) {
     }
   }
   return Promise.all(Array.from({ length: Math.min(limit, arr.length) }, worker)).then(() => out);
+}
+
+async function auditImageUrls(items) {
+  const urls = [...new Set(items.map((item) => item.image).filter((url) => /^https?:\/\//i.test(url || '')))];
+  const screenshot = urls.filter(isScreenshotServiceUrl).length;
+  const directUrls = urls.filter((url) => !isScreenshotServiceUrl(url));
+  let verified = 0;
+  let httpFailures = 0;
+  let nonImageResponses = 0;
+  let requestFailures = 0;
+  await mapLimit(directUrls, 8, async (url) => {
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: { Range: 'bytes=0-0' },
+        signal: AbortSignal.timeout(4000),
+      });
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok) httpFailures++;
+      else if (/^image\//i.test(contentType)) verified++;
+      else nonImageResponses++;
+    } catch {
+      requestFailures++;
+    } finally {
+      try { await response?.body?.cancel(); } catch { /* gövde zaten kapanmış olabilir */ }
+    }
+  });
+  return {
+    total: urls.length,
+    direct: directUrls.length,
+    screenshot,
+    verified,
+    httpFailures,
+    nonImageResponses,
+    requestFailures,
+  };
 }
 
 const fullName = (id) => `${encodeURIComponent(id)}.json`;
@@ -60,7 +96,7 @@ async function main() {
     let n = 0;
     for (const it of items) {
       const real = resolved.get(it.link);
-      if (real && real !== it.link && isArticleUrl(real)) {
+      if (real && real !== it.link && isArticleUrl(real) && isExpectedPublisherUrl(it.source, real)) {
         it.link = real;
         n++;
       }
@@ -78,7 +114,7 @@ async function main() {
   }
   note(`makale bağlantıları: ${items.length} geçerli, ${badLinks.length} hatalı kayıt ayıklandı`);
 
-  // Eksik kapak görsellerini 5 katmanlı motorla tamamla (HEPSİ)
+  // Eksik kapak görsellerini challenge-duyarlı görsel motoruyla tamamla (HEPSİ)
   try {
     await enrichImages(items, 5000, 6);
   } catch (e) {
@@ -86,6 +122,8 @@ async function main() {
   }
   const withImg = items.filter((i) => i.image).length;
   note(`kapak görseli: ${withImg}/${items.length}`);
+  const imageAudit = await auditImageUrls(items);
+  note(`görsel denetimi (benzersiz URL; kart=${withImg}/${items.length}): toplam=${imageAudit.total}, doğrudan=${imageAudit.direct}, screenshot-proxy=${imageAudit.screenshot}, doğrulanan=${imageAudit.verified}, HTTP-hatası=${imageAudit.httpFailures}, görsel-olmayan=${imageAudit.nonImageResponses}, istek-hatası=${imageAudit.requestFailures}`);
 
   // Tam metinler (modal'da sitede okuma) — paralel, habere özel dayanıklılık
   let fullOk = 0;
@@ -140,6 +178,7 @@ async function main() {
     durationMs: Date.now() - t0,
     news: items.length,
     withImage: withImg,
+    imageAudit,
     fullTexts: fullOk,
     marketLive: !!market.live,
     weatherLive: !!weather.live,
