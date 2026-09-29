@@ -11,6 +11,7 @@
 import sanitizeHtml from 'sanitize-html';
 import { USER_AGENT, SOURCE_BY_ID } from './config.js';
 import { fetchText } from './rss.js';
+import { stealthEnabled, stealthFetchHtml, stealthResolveGoogleNews, stealthStats } from './stealth.js';
 
 const JINA_PREFIX = 'https://r.jina.ai/';
 
@@ -21,7 +22,22 @@ const googleUrlCache = new Map(); // google news link -> gerçek makale URL
 const articleCache = new Map();   // id -> { at, data }
 const ARTICLE_TTL = 24 * 60 * 60 * 1000;
 
-async function fetchHtml(url, timeoutMs = 9000) {
+// Host bazlı istek aralığı: aynı yayıncıya arka arkaya istekle 429 riskini azaltır.
+const hostLastHit = new Map();
+const HOST_MIN_GAP_MS = 250;
+
+async function paceHost(url) {
+  try {
+    const host = new URL(url).host;
+    const last = hostLastHit.get(host) || 0;
+    const wait = last + HOST_MIN_GAP_MS - Date.now();
+    if (wait > 0) await sleep(wait);
+    hostLastHit.set(host, Date.now());
+  } catch { /* geçersiz URL */ }
+}
+
+async function fetchHtml(url, timeoutMs = 9000, attempt = 0) {
+  await paceHost(url);
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -31,12 +47,18 @@ async function fetchHtml(url, timeoutMs = 9000) {
       headers: {
         'User-Agent': USER_AGENT,
         Accept: 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9,tr;q=0.8',
+        'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
       },
     });
     if (!res.ok) {
       const error = new Error(`HTTP ${res.status}`);
       error.status = res.status;
+      if (res.status === 429 && attempt < 1) {
+        // Tekrar deneme: Retry-After yoksa kısa geri çekilme
+        const ra = Number(res.headers.get('retry-after') || 0);
+        await sleep(Math.min(8000, (ra > 0 ? ra * 1000 : 1500) + Math.floor(Math.random() * 700)));
+        return fetchHtml(url, timeoutMs, attempt + 1);
+      }
       throw error;
     }
     return { html: await res.text(), finalUrl: res.url || url };
@@ -336,18 +358,33 @@ export async function resolveArticleUrl(url) {
   if (cached) return cached;
   try {
     const map = await resolveGoogleBatch([url]);
-    if (map.get(url)) return map.get(url);
-    const id = googleArticleId(url);
-    if (decodeParamsCache.get(id)?.challenge) return url;
-    // Yalnız challenge olmayan yanıtlar için metin tabanlı URL çözümlemesi
-    const md = await fetchJina(url, 18000);
-    if (isChallengeResponse(md)) return url;
-    const m = md.match(/^URL Source:\s*(https?:\/\/\S+)/m);
-    if (m && isArticleUrl(m[1])) {
-      googleUrlCache.set(url, m[1]);
-      return m[1];
-    }
-  } catch { /* sessiz */ }
+    if (map.get(url) && map.get(url) !== url) return map.get(url);
+  } catch { /* yedek katmanlara düş */ }
+  const id = googleArticleId(url);
+  if (!decodeParamsCache.get(id)?.challenge) {
+    try {
+      // Yalnız challenge olmayan yanıtlar için metin tabanlı URL çözümlemesi
+      const md = await fetchJina(url, 18000);
+      if (!isChallengeResponse(md)) {
+        const m = md.match(/^URL Source:\s*(https?:\/\/\S+)/m);
+        if (m && isArticleUrl(m[1])) {
+          googleUrlCache.set(url, m[1]);
+          return m[1];
+        }
+      }
+    } catch { /* sessiz */ }
+  }
+  // 3) Stealth tarayıcıyla gerçek yönlendirmeyi yakala
+  if (stealthEnabled()) {
+    try {
+      const real = await stealthResolveGoogleNews(url);
+      if (real && isArticleUrl(real) && !isGoogleHost(new URL(real).hostname)) {
+        googleUrlCache.set(url, real);
+        googleUrlCache.set(id, real);
+        return real;
+      }
+    } catch { /* sessiz */ }
+  }
   return url;
 }
 
@@ -492,6 +529,14 @@ export async function extractOgImage(link, sourceId = '') {
     if (!blocked) img = pickBestImage(html, finalUrl);
   } catch (error) {
     blocked = [403, 429].includes(error.status);
+  }
+  // 2) Challenge/blok durumunda stealth tarayıcı ile görsel arama
+  if (!img && blocked && stealthEnabled()) {
+    try {
+      const page = await stealthFetchHtml(realUrl);
+      if (isExpectedPublisherUrl(sourceId, page.finalUrl)) img = pickBestImage(page.html, page.finalUrl);
+      else blocked = true;
+    } catch { /* sonraki katmana düş */ }
   }
   if (!img && !blocked) img = await oembedImage(realUrl);
   if (!img && !blocked) {
@@ -642,63 +687,101 @@ function parseJinaMeta(md) {
   return { title: title.trim() };
 }
 
+/** Readability + sanitizasyon — doğrudan ve stealth katmanları için ortak yol */
+async function readabilityFromHtml(html, finalUrl, item) {
+  const { JSDOM } = await import('jsdom');
+  const { Readability } = await import('@mozilla/readability');
+  const dom = new JSDOM(html, { url: finalUrl });
+  const parsed = new Readability(dom.window.document).parse();
+  const text = (parsed?.textContent || '').replace(/\s+/g, ' ').trim();
+  if (parsed?.content && text.length >= 400) {
+    const contentHtml = sanitizeContent(parsed.content).replace(
+      /(src|href)=["'](\/[^"']*)["']/g,
+      (_, attr, rel) => `${attr}="${absUrl(rel, finalUrl)}"`
+    );
+    const words = text.split(' ').length;
+    return {
+      title: parsed.title || item.title,
+      author: parsed.byline || item.author || '',
+      excerpt: parsed.excerpt || item.summary || '',
+      image: parsed.heroImage ? absUrl(parsed.heroImage, finalUrl) : item.image,
+      content: contentHtml,
+      textLength: text.length,
+      readingMinutes: Math.max(1, Math.round(words / 220)),
+      resolvedUrl: finalUrl,
+    };
+  }
+  const err = new Error('content too short / challenge page');
+  err.reason = 'too-short';
+  return Promise.reject(err);
+}
+
 export async function fetchArticle(item) {
   const cached = articleCache.get(item.id);
   if (cached && Date.now() - cached.at < ARTICLE_TTL) return cached.data;
   if (!isGoogleNewsArticleUrl(item.link) && !isExpectedPublisherUrl(item.source, item.link)) {
-    throw new Error('publisher link does not match the card source');
+    const error = new Error('publisher link does not match the card source');
+    error.reason = 'source-mismatch';
+    throw error;
   }
 
   // Google News çözümünü yalnız yayıncı alan adıyla eşleşiyorsa kullan.
   const resolvedUrl = await resolveArticleUrl(item.link);
   const realUrl = isExpectedPublisherUrl(item.source, resolvedUrl) ? resolvedUrl : item.link;
 
+  const failures = [];
+  let stealthAttempted = false;
+
   // 1) Doğrudan çekim + Readability
   try {
     // jsdom tembel yüklenir: ortamda bozuksa süreç çökmez, jina katmanına düşer
-    const { JSDOM } = await import('jsdom');
-    const { Readability } = await import('@mozilla/readability');
     const { html, finalUrl } = await fetchHtml(realUrl, 12000);
     if (isChallengeResponse(html)) {
       const error = new Error('publisher returned a security challenge');
       error.challenge = true;
+      error.reason = 'challenge';
       throw error;
     }
     if (!isExpectedPublisherUrl(item.source, finalUrl)) {
       const error = new Error('publisher redirect did not match the card source');
       error.sourceMismatch = true;
+      error.reason = 'source-mismatch';
       throw error;
     }
-    const dom = new JSDOM(html, { url: finalUrl });
-    const parsed = new Readability(dom.window.document).parse();
-    const text = (parsed?.textContent || '').replace(/\s+/g, ' ').trim();
-    if (parsed?.content && text.length >= 400) {
-      const contentHtml = sanitizeContent(parsed.content).replace(
-        /(src|href)=["'](\/[^"']*)["']/g,
-        (_, attr, rel) => `${attr}="${absUrl(rel, finalUrl)}"`
-      );
-      const words = text.split(' ').length;
-      const data = {
-        title: parsed.title || item.title,
-        author: parsed.byline || item.author || '',
-        excerpt: parsed.excerpt || item.summary || '',
-        image: parsed.heroImage ? absUrl(parsed.heroImage, finalUrl) : item.image,
-        content: contentHtml,
-        textLength: text.length,
-        readingMinutes: Math.max(1, Math.round(words / 220)),
-        resolvedUrl: finalUrl,
-        via: 'direct',
-      };
-      articleCache.set(item.id, { at: Date.now(), data });
-      return data;
-    }
-    throw new Error('content too short / challenge page');
+    const data = { ...(await readabilityFromHtml(html, finalUrl, item)), via: 'direct' };
+    articleCache.set(item.id, { at: Date.now(), data });
+    return data;
   } catch (e) {
-    // Challenge ve açık blok yanıtlarında başka bir erişim yolu denenmez.
-    if (e.challenge || e.sourceMismatch || [403, 429].includes(e.status)) {
+    if (e.sourceMismatch) {
       throw new Error(`${e.message}; publisher challenge/block/source mismatch left untouched`);
     }
-    // 2) Metin yedeği yalnız challenge olmayan yanıtlar için denenir.
+    failures.push(`direct: ${e.message}`);
+    e.status && failures.push(`status: ${e.status}`);
+
+    // 2) Stealth tarayıcı — challenge/403/429/kısa içerik/ağ hatasında agresif deneme
+    if (stealthEnabled()) {
+      stealthAttempted = true;
+      try {
+        const page = await stealthFetchHtml(realUrl);
+        if (isChallengeResponse(page.html)) {
+          failures.push('stealth: challenge page');
+        } else if (!isExpectedPublisherUrl(item.source, page.finalUrl)) {
+          failures.push('stealth: source mismatch');
+        } else {
+          try {
+            const data = { ...(await readabilityFromHtml(page.html, page.finalUrl, item)), via: 'stealth' };
+            articleCache.set(item.id, { at: Date.now(), data });
+            return data;
+          } catch (e2) {
+            failures.push(`stealth: ${e2.message}`);
+          }
+        }
+      } catch (e2) {
+        failures.push(`stealth: ${String(e2.message).slice(0, 100)}`);
+      }
+    }
+
+    // 3) Metin yedeği (jina) — son çare; challenge yanıtı olsa bile denenir (farklı IP)
     try {
       const md = await fetchJina(realUrl, 18000);
       if (isChallengeResponse(md)) throw new Error('text fallback returned a security challenge');
@@ -721,7 +804,22 @@ export async function fetchArticle(item) {
       articleCache.set(item.id, { at: Date.now(), data });
       return data;
     } catch (e2) {
-      throw new Error(`${e.message}; fallback: ${e2.message}`);
+      failures.push(`jina: ${e2.message}`);
     }
+
+    const error = new Error(failures.join('; ').slice(0, 300));
+    error.reason = classifyFailures(failures, e, stealthAttempted);
+    throw error;
   }
+}
+
+/** Hata listesinden öncelikli neden kodu üretir (derleme teşhisi için) */
+export function classifyFailures(failures, firstError = {}, stealthAttempted = false) {
+  const all = failures.join(' ').toLowerCase();
+  if (firstError.reason === 'challenge' || /security challenge|challenge page/.test(all)) return 'challenge';
+  if (firstError.status === 403 || /http 403/.test(all)) return 'http403';
+  if (firstError.status === 429 || /http 429/.test(all)) return 'http429';
+  if (/too short/.test(all)) return 'too-short';
+  if (/timeout|aborted|etimedout|econnreset|enotfound|econnrefused/.test(all)) return 'network';
+  return stealthAttempted ? 'stealth-exhausted' : 'other';
 }

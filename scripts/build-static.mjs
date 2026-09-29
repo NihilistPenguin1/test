@@ -115,6 +115,25 @@ async function main() {
   } catch (e) {
     console.log(`  google news çözümü başarısız: ${e.message}`);
   }
+  // 2) Kalan Google News linklerini stealth tarayıcıyla çöz
+  {
+    const still = items.filter((it) => isGoogleNewsArticleUrl(it.link));
+    if (still.length) {
+      note(`google news kalan: ${still.length} link tarayıcıyla çözülecek`);
+      const { stealthResolveGoogleNews } = await import('../server/stealth.js');
+      let n = 0;
+      await mapLimit(still, 4, async (it) => {
+        try {
+          const real = await stealthResolveGoogleNews(it.link);
+          if (real && isArticleUrl(real) && isExpectedPublisherUrl(it.source, real)) {
+            it.link = real;
+            n++;
+          }
+        } catch { /* yedek bağlantıda kalır */ }
+      });
+      note(`google news stealth çözümü: ${n}/${still.length} link gerçek makaleye yönlendirildi`);
+    }
+  }
   noteStage('Google News çözümü');
 
   // Bozuk ve AP/Reuters yayıncı alan adıyla uyuşmayan doğrudan linkleri yayına sokma.
@@ -151,13 +170,14 @@ async function main() {
   const fullTextItems = items.slice(0, FULL_TEXT_BUILD_LIMIT);
   let fullOk = 0;
   const fullDocs = [];
-  const hostStats = new Map(); // host -> { ok, fail, via: Map }
-  const bump = (it, ok, via = '') => {
+  const hostStats = new Map(); // host -> { ok, fail, via: Map, reasons: Map }
+  const bump = (it, ok, via = '', reason = '') => {
     let host = '?';
     try { host = new URL(it.link).hostname.replace(/^www\./, ''); } catch { /* bilinmeyen */ }
-    const s = hostStats.get(host) || { ok: 0, fail: 0, via: new Map() };
+    const s = hostStats.get(host) || { ok: 0, fail: 0, via: new Map(), reasons: new Map() };
     ok ? s.ok++ : s.fail++;
     if (ok && via) s.via.set(via, (s.via.get(via) || 0) + 1);
+    if (!ok && reason) s.reasons.set(reason, (s.reasons.get(reason) || 0) + 1);
     hostStats.set(host, s);
   };
   await mapLimit(fullTextItems, 10, async (it) => {
@@ -168,17 +188,21 @@ async function main() {
         fullOk++;
         bump(it, true, article.via || '?');
       } else {
-        bump(it, false);
+        bump(it, false, '', 'empty');
       }
     } catch (e) {
-      bump(it, false);
+      bump(it, false, '', e.reason || 'other');
       console.log(`  tam metin yok (${it.id}): ${String(e.message).slice(0, 80)}`);
     }
   });
   note(`tam metin: ${fullOk}/${fullTextItems.length} denenen (en yeni ${fullTextItems.length}/${items.length})`);
   const hostSummary = [...hostStats.entries()]
     .sort((a, b) => (b[1].fail - a[1].fail) || (b[1].ok + b[1].fail) - (a[1].ok + a[1].fail))
-    .map(([h, s]) => `${h}: ${s.ok}/${s.ok + s.fail}${s.via.size ? ` [${[...s.via.entries()].map(([v, n]) => `${v}=${n}`).join(',')}]` : ''}`)
+    .map(([h, s]) => {
+      const via = s.via.size ? ` [${[...s.via.entries()].map(([v, n]) => `${v}=${n}`).join(',')}]` : '';
+      const why = s.reasons.size ? ` {${[...s.reasons.entries()].map(([v, n]) => `${v}:${n}`).join(',')}}` : '';
+      return `${h}: ${s.ok}/${s.ok + s.fail}${via}${why}`;
+    })
     .join(' · ');
   note(`tam metin kaynak özeti: ${hostSummary || 'veri yok'}`);
   noteStage('tam metinler');
@@ -191,6 +215,14 @@ async function main() {
   const marketSamples = (market.items || []).filter((m) => m.sample).map((m) => m.key);
   note(`piyasa: ${market.items?.length || 0} kalem (live=${market.live}, örnek=${marketSamples.join(',') || 'yok'}) · hava (live=${weather.live})`);
   noteStage('piyasa ve hava');
+
+  // Stealth tarayıcı teşhisi
+  try {
+    const { stealthStats, closeStealth } = await import('../server/stealth.js');
+    const s = stealthStats();
+    note(`stealth: denenen=${s.attempts}, başarılı=${s.successes}, challenge=${s.challengeSeen}, geçen=${s.challengeCleared}, bütçe=${Math.round(s.budgetSpentMs / 1000)}sn, duvarlı-host=${s.hosts.filter((h) => h.hardBlocked).map((h) => h.host).join(',') || 'yok'}`);
+    await closeStealth();
+  } catch { /* stealth kapalı olabilir */ }
 
   /* ---------- 2) dist/ ağacını kur (tek seferde) ---------- */
 
