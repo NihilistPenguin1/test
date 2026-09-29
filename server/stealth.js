@@ -145,6 +145,9 @@ export function stealthShouldSkip(url) {
   if (elapsedMs() > WALL_CLOCK_MS) return 'wall-clock cutoff';
   const s = getHostState(url).state;
   if (s.hardBlocked && s.quickUntil > Date.now()) return 'host given up';
+  // İki devrede de hiçbir şey çıkmadıysa bu host artık bu derlemede denemez:
+  // 69 haberlik Reuters kuyruğu, şansı olan AP/France24/Sky'ı düşürüyordu.
+  if (s.cycles >= 2 && !s.ok) return 'host unwinnable';
   return '';
 }
 
@@ -641,7 +644,11 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
   // quick: bu hostta tam çözüm son denemede de işlemedi → tek/hızlı deneme.
   // Kalıcı değil: cooldown süresince tekrar tam deneme şansı doğar.
   const quick = state.hardBlocked && state.quickUntil > Date.now();
-  if (state.hardBlocked && !quick) { state.hardBlocked = false; state.fail = 0; }
+  if (state.hardBlocked && !quick && state.cycles < 2) { state.hardBlocked = false; state.fail = 0; }
+  if (state.cycles >= 2 && !state.ok) {
+    stats.budgetSkips++;
+    throw new Error(`stealth skipped (${host}): unwinnable`);
+  }
   const scope = opts.scope || 'article';
   // kesim yaklaştıysa yeni tarayıcı işi açma (host başarısız sayılmaz)
   if (!withinBudget(scope)) {

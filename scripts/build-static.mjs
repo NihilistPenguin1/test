@@ -210,8 +210,7 @@ async function main() {
   const browserWorthIt = (it) => {
     if (!stealthOn || !stealthMod?.stealthShouldSkip) return false;
     try {
-      const u = new URL(it.link);
-      return !stealthMod.stealthShouldSkip(u.href);
+      return !stealthMod.stealthShouldSkip(new URL(it.link).href);
     } catch { return true; }
   };
   const deferred = [];
@@ -225,12 +224,13 @@ async function main() {
         return;
       }
       if (phases.browser === false && browserWorthIt(it)) { deferred.push(it); return; }
-      bump(it, false, '', 'empty');
+      bump(it, false, '', browserWorthIt(it) ? 'empty' : 'host-unwinnable');
     } catch (e) {
       const msg = String(e.message || '');
       const fatal = e.reason === 'source-mismatch' || /does not match the card source/.test(msg);
       if (!fatal && phases.browser === false && browserWorthIt(it)) { deferred.push(it); return; }
-      bump(it, false, '', fatal ? 'source-mismatch' : (e.reason || 'other'));
+      const gaveUp = !fatal && stealthOn && !browserWorthIt(it);
+      bump(it, false, '', fatal ? 'source-mismatch' : (gaveUp ? 'host-unwinnable' : (e.reason || 'other')));
       console.log(`  tam metin yok (${it.id}): ${msg.slice(0, 80)}`);
     }
   };
