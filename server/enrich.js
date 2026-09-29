@@ -787,7 +787,7 @@ export async function fetchArticle(item, phases = {}) {
 
   // 1) Doğrudan çekim + Readability
   try {
-    if (!wantHttp) throw new Error('http phases skipped in browser pass');
+    if (!wantHttp) { const skip = new Error('http'); skip.noNote = true; throw skip; }
     // jsdom tembel yüklenir: ortamda bozuksa süreç çökmez, jina katmanına düşer
     const { html, finalUrl } = await fetchHtml(realUrl, 12000);
     if (isChallengeResponse(html)) {
@@ -809,7 +809,7 @@ export async function fetchArticle(item, phases = {}) {
     if (e.sourceMismatch) {
       throw new Error(`${e.message}; publisher challenge/block/source mismatch left untouched`);
     }
-    failures.push(`direct: ${e.message}`);
+    if (!e.noNote) failures.push(`direct: ${e.message}`);
     e.status && failures.push(`status: ${e.status}`);
 
     // 2) Stealth tarayıcı — düz HTTP'nin işlemediği HER durumda denenir.
@@ -839,7 +839,7 @@ export async function fetchArticle(item, phases = {}) {
 
     // 3) Metin yedeği (jina) — son çare; challenge yanıtı olsa bile denenir (farklı IP)
     try {
-      if (!wantHttp) throw new Error('jina already tried in http pass');
+      if (!wantHttp) { const skip = new Error('jina'); skip.noNote = true; throw skip; }
       const md = await fetchJina(realUrl, 18000);
       if (isChallengeResponse(md)) throw new Error('text fallback returned a security challenge');
       const meta = parseJinaMeta(md);
@@ -861,9 +861,12 @@ export async function fetchArticle(item, phases = {}) {
       articleCache.set(item.id, { at: Date.now(), data });
       return data;
     } catch (e2) {
-      failures.push(`jina: ${e2.message}`);
+      if (!e2.noNote) failures.push(`jina: ${e2.message}`);
     }
 
+    if (!failures.length) {
+      failures.push(stealthAttempted ? 'stealth: içeriğe ulaşılamadı' : 'tüm aşamalar atlandı (bu turda ağa çıkılmadı)');
+    }
     const error = new Error(failures.join('; ').slice(0, 300));
     error.reason = classifyFailures(failures, e, stealthAttempted);
     throw error;
