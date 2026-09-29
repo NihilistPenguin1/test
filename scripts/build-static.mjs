@@ -33,7 +33,7 @@ async function auditImageUrls(items) {
   let httpFailures = 0;
   let nonImageResponses = 0;
   let requestFailures = 0;
-  await mapLimit(directUrls, 8, async (url) => {
+  await mapLimit(directUrls, 24, async (url) => {
     let response;
     try {
       response = await fetch(url, {
@@ -125,7 +125,7 @@ async function main() {
 
   // Eksik kapak görsellerini challenge-duyarlı görsel motoruyla tamamla (HEPSİ)
   try {
-    await enrichImages(items, 5000, 6);
+    await enrichImages(items, 5000, 8);
   } catch (e) {
     console.log(`  görsel zenginleştirme hatası: ${e.message}`);
   }
@@ -137,7 +137,7 @@ async function main() {
   // Tam metinler (modal'da sitede okuma) — paralel, habere özel dayanıklılık
   let fullOk = 0;
   const fullDocs = [];
-  await mapLimit(items, 3, async (it) => {
+  await mapLimit(items, 10, async (it) => {
     try {
       const article = await fetchArticle(it);
       if (article?.content) {
