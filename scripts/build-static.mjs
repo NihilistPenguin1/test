@@ -151,18 +151,36 @@ async function main() {
   const fullTextItems = items.slice(0, FULL_TEXT_BUILD_LIMIT);
   let fullOk = 0;
   const fullDocs = [];
+  const hostStats = new Map(); // host -> { ok, fail, via: Map }
+  const bump = (it, ok, via = '') => {
+    let host = '?';
+    try { host = new URL(it.link).hostname.replace(/^www\./, ''); } catch { /* bilinmeyen */ }
+    const s = hostStats.get(host) || { ok: 0, fail: 0, via: new Map() };
+    ok ? s.ok++ : s.fail++;
+    if (ok && via) s.via.set(via, (s.via.get(via) || 0) + 1);
+    hostStats.set(host, s);
+  };
   await mapLimit(fullTextItems, 10, async (it) => {
     try {
       const article = await fetchArticle(it);
       if (article?.content) {
         fullDocs.push({ id: it.id, item: it, article });
         fullOk++;
+        bump(it, true, article.via || '?');
+      } else {
+        bump(it, false);
       }
     } catch (e) {
+      bump(it, false);
       console.log(`  tam metin yok (${it.id}): ${String(e.message).slice(0, 80)}`);
     }
   });
   note(`tam metin: ${fullOk}/${fullTextItems.length} denenen (en yeni ${fullTextItems.length}/${items.length})`);
+  const hostSummary = [...hostStats.entries()]
+    .sort((a, b) => (b[1].fail - a[1].fail) || (b[1].ok + b[1].fail) - (a[1].ok + a[1].fail))
+    .map(([h, s]) => `${h}: ${s.ok}/${s.ok + s.fail}${s.via.size ? ` [${[...s.via.entries()].map(([v, n]) => `${v}=${n}`).join(',')}]` : ''}`)
+    .join(' · ');
+  note(`tam metin kaynak özeti: ${hostSummary || 'veri yok'}`);
   noteStage('tam metinler');
 
   // Piyasa + hava (sunucu tarafında çekim — tarayıcı CORS sorunu yok)
