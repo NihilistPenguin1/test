@@ -13,6 +13,7 @@ on:
       - main
       - arena/01a0e8f9-test
       - arena/01a0ec10-test
+      - arena/01a0ec2f-test
 
 permissions:
   contents: read
@@ -42,7 +43,10 @@ jobs:
         run: npm test
 
       - name: Statik siteyi üret (haber + kapak görselleri + tam metin + piyasa + hava)
-        run: node scripts/build-static.mjs
+        env:
+          TELGRAF_CHROME: /usr/bin/google-chrome
+          TELGRAF_HEADFUL: "1"
+        run: xvfb-run -a node scripts/build-static.mjs
 
       - name: Pages arşivi yükle
         uses: actions/upload-pages-artifact@v3

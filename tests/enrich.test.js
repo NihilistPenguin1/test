@@ -1,3 +1,7 @@
+// Bu dosya meydan okuma (challenge) yanıtlarında ek erişim yolu denenmemesi
+// politikasını sınar; stealth katmanı politikası tests/stealth.test.js'tedir.
+process.env.TELGRAF_STEALTH = '0';
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {

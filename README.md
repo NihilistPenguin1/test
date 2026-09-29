@@ -7,8 +7,11 @@ altın** piyasa verilerini ve **İstanbul hava durumu**nu gösterir; haberleri *
 ## Özellikler
 
 - **RSS toplama** — 19 kaynak, 31 besleme (bölüm feed'leriyle geniş kapsama), 5 dk önbellek
-- **Orijinal görseller** — feed görseli korunur; og:image, oEmbed ve metin yedeği yalnız challenge olmayan yanıtlar için denenir
-- **Challenge duyarlı okuma** — Readability + metin yedeği; güvenlik challenge'ı veya 403/429 yanıtında alternatif erişim denenmez
+- **Orijinal görseller** — feed görseli korunur; og:image, oEmbed ve metin yedeği katmanları
+- **Stealth tarayıcı + challenge geçme** — 403/429/güvenlik duvarında gerçek tarayıcı oturumu:
+  turnstile/reCAPTCHA/hCaptcha onay tıklamaları, "Press & Hold" çözme, oturum ısıtma,
+  mobil taklit, URL çeşitlemeleri; sonuçta Readability + metin yedeği
+- **Challenge duyarlı okuma** — her katmanda yayıncı alan adı doğrulaması (Google Fonts tuzaklarına karşı)
 - **Hızlı statik derleme** — statik yayında en yeni 300 haberin tam metni önceden hazırlanır; eski haberler kaynak yayına bağlanır
 - **Okuma araçları** — sesli dinleme (Web Speech), yazı boyutu A−/A+, paylaşma (X, WhatsApp,
   LinkedIn, kopyala), yazdırma, okuma ilerleme çubuğu, ilgili haberler
