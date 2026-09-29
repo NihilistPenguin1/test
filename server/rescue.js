@@ -57,9 +57,9 @@ const MAX_SEARCHES = int(process.env.TELGRAF_RESCUE_MAX_SEARCHES, 45);
 /** Bundan dolu bir kopya varsa arşivi daha fazla yoklama (istek kirası) */
 const FULL_CAPTURE = int(process.env.TELGRAF_RESCUE_FULL_CAPTURE, 2500);
 /** Ayna yolunda bir haber için en fazla kaç aday sayfası indirilir */
-const MIRROR_TRIES = int(process.env.TELGRAF_RESCUE_MIRROR_TRIES, 2);
+const MIRROR_TRIES = int(process.env.TELGRAF_RESCUE_MIRROR_TRIES, 3);
 /** Bu kadar haberden sonra ayna yolu o host için kapanır (boşuna aday indirmesin) */
-const MIRROR_MISS_AFTER = int(process.env.TELGRAF_RESCUE_MIRROR_MISS_AFTER, 2);
+const MIRROR_MISS_AFTER = int(process.env.TELGRAF_RESCUE_MIRROR_MISS_AFTER, 6);
 /** Bir haber için arşive en fazla kaç yoklama (gecikme + kibarlık bütçesi) */
 const WAYBACK_PROBES = int(process.env.TELGRAF_RESCUE_WB_PROBES, 4);
 
@@ -166,7 +166,7 @@ const DOWN_AFTER = int(process.env.TELGRAF_RESCUE_DOWN_AFTER, 2);
 /** Taşıma hatasından sonra yola verilecek nefes (ms): 0 => ara vermeden devam */
 const COOLDOWN_MS = int(process.env.TELGRAF_RESCUE_COOLDOWN_MS, 12000);
 /** Bu kadar kısıtlamadan sonra arşiv yolu bu derlemede kapatılır */
-const THROTTLE_GIVEUP = int(process.env.TELGRAF_RESCUE_THROTTLE_GIVEUP, 10);
+const THROTTLE_GIVEUP = int(process.env.TELGRAF_RESCUE_THROTTLE_GIVEUP, 4);
 /** Arşiv istekleri arasına konulan nefes (ms) — 403 yememenin bedava yolu */
 const WB_GAP_MS = int(process.env.TELGRAF_RESCUE_WB_GAP, 400);
 /** En yavaş yol (jina ~30 sn/istek) için üst sınır — derleme süresini yemesin */

@@ -50,6 +50,12 @@ jobs:
           # Kurtarma turu (Wayback kopyası / tel aynası / beklemeli jina):
           # duvarlı yayıncılarda kapsamı artıran üçüncü geçiş. Süreleri sınırlı,
           # böylece derleme 30 dakikalık iş zamanına çarpmaz.
+          # Görsel aşaması çoğunlukla HTTP'dir; tarayıcı penceresini habere
+          # bırakmak kapsamı artırıyor (CI ölçümü: article 371/360sn dolunca
+          # 197 iş kuyrukta düştü ve AP 15/36'da kaldı).
+          TELGRAF_STEALTH_WALL_MS: "900000"
+          TELGRAF_STEALTH_ARTICLE_BUDGET: "540000"
+          TELGRAF_STEALTH_IMAGE_BUDGET: "180000"
           TELGRAF_RESCUE: "1"
           TELGRAF_RESCUE_MS: "240000"
           TELGRAF_RESCUE_ITEM_MS: "20000"
