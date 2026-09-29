@@ -79,8 +79,16 @@ function note(msg) {
   }
 }
 
+let stageStartedAt = 0;
+function noteStage(name) {
+  const seconds = ((Date.now() - stageStartedAt) / 1000).toFixed(1);
+  note(`zamanlama ${name}: ${seconds} sn`);
+  stageStartedAt = Date.now();
+}
+
 async function main() {
   const t0 = Date.now();
+  stageStartedAt = t0;
   console.log('▶ TELGRAF statik derleme başladı');
 
   /* ---------- 1) Topla (bellekte) ---------- */
@@ -89,6 +97,7 @@ async function main() {
   const news = await getNews({ force: true });
   const items = news.items;
   note(`haber: ${items.length} (live=${news.live}, hata=${news.errors?.length || 0})`);
+  noteStage('haber çekimi');
 
   // Google News linklerini TOPLU çöz (Reuters/AP vb. gerçek makale URL'sine)
   try {
@@ -105,6 +114,7 @@ async function main() {
   } catch (e) {
     console.log(`  google news çözümü başarısız: ${e.message}`);
   }
+  noteStage('Google News çözümü');
 
   // Bozuk ve AP/Reuters yayıncı alan adıyla uyuşmayan doğrudan linkleri yayına sokma.
   const badLinks = items.filter((it) => !isStoryLink(it.link)
@@ -133,6 +143,7 @@ async function main() {
   note(`kapak görseli: ${withImg}/${items.length}`);
   const imageAudit = await auditImageUrls(items);
   note(`görsel denetimi (benzersiz URL; kart=${withImg}/${items.length}): toplam=${imageAudit.total}, doğrudan=${imageAudit.direct}, screenshot-proxy=${imageAudit.screenshot}, doğrulanan=${imageAudit.verified}, HTTP-hatası=${imageAudit.httpFailures}, görsel-olmayan=${imageAudit.nonImageResponses}, istek-hatası=${imageAudit.requestFailures}`);
+  noteStage('görsel zenginleştirme ve denetim');
 
   // Tam metinler (modal'da sitede okuma) — paralel, habere özel dayanıklılık
   let fullOk = 0;
@@ -149,6 +160,7 @@ async function main() {
     }
   });
   note(`tam metin: ${fullOk}/${items.length}`);
+  noteStage('tam metinler');
 
   // Piyasa + hava (sunucu tarafında çekim — tarayıcı CORS sorunu yok)
   const [market, weather] = await Promise.all([
@@ -157,6 +169,7 @@ async function main() {
   ]);
   const marketSamples = (market.items || []).filter((m) => m.sample).map((m) => m.key);
   note(`piyasa: ${market.items?.length || 0} kalem (live=${market.live}, örnek=${marketSamples.join(',') || 'yok'}) · hava (live=${weather.live})`);
+  noteStage('piyasa ve hava');
 
   /* ---------- 2) dist/ ağacını kur (tek seferde) ---------- */
 
@@ -193,6 +206,7 @@ async function main() {
     weatherLive: !!weather.live,
   }, null, 2));
 
+  noteStage('statik dosyalar');
   console.log(`✔ dist/ hazır (${Math.round((Date.now() - t0) / 1000)} sn)`);
 }
 

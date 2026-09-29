@@ -246,7 +246,7 @@ export async function resolveGoogleBatch(urls) {
   if (!pending.length) return out;
 
   // 1) İmza + zaman damgaları: küçük, sınırlı eşzamanlılık (3 GET).
-  const params = await mapLimit(pending, 3, async (p) => ({ ...p, ...(await getDecodeParams(p.id)) }));
+  const params = await mapLimit(pending, 8, async (p) => ({ ...p, ...(await getDecodeParams(p.id)) }));
 
   // 2) Doğrudan dönenleri yaz; imzalıları tek POST'a koy
   const needBatch = [];
