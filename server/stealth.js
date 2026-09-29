@@ -667,13 +667,19 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
   }
   markUsed();
   markScope(scope);
-  markUsed();
+  // Chrome'un soğuk açılışı (sparticuz arşivi + süreç) CI'da 30 sn'yi aşabiliyor.
+  // Bu, yayıncının suçu değil altyapı gecikmesidir: bütçeyi tarayıcı hazır
+  // OLDUKTAN sonra başlat, aksi halde ilk haber "duvar var" diye batıyor.
+  try {
+    await Promise.race([getBrowser(), new Promise((r) => setTimeout(r, 90000))]);
+  } catch { /* açılış sorununu attemptOnce raporlar */ }
   const started = Date.now();
   const deadline = started + Math.min(opts.timeoutMs || perUrlBudget, quick ? 12000 : perUrlBudget);
   // Duvarlı hostta her makalede uzun deneme yapma: tek hızlı deneme
   const strategies = quick ? ['quick'] : ['warm-context', 'fresh-context', 'mobile-context'];
 
   let lastError = 'not attempted';
+  let transport = false; // zaman aşımı/ağ: hostun kusuru sayılmaz
   let attempted = false;
   const waitMs = Math.max(1500, deadline - Date.now());
   if (!(await acquireHost(state, waitMs))) {
@@ -706,6 +712,9 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
         lastError = 'challenge remained';
       } catch (e) {
         lastError = e.message;
+        // Zaman aşımı/ağ hatası yayıncının duvarı değil: host cezası yazılmaz,
+        // aksi halde CI'da yavaş bir tur "çözülmez" kararı üretiyor.
+        if (/net::ERR|timeout|timed out|refused|navigation incomplete|empty body|crashed|target closed/i.test(String(e.message || ''))) transport = true;
       }
       if (!quick) await sleep(rnd(600, 1600));
     }
@@ -719,7 +728,7 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
     recordSpent(scope, Date.now() - started);
     throw new Error(`stealth not attempted (${host}): ${lastError}`);
   }
-  state.fail++;
+  if (!transport) state.fail++;
   if (state.fail >= 3 && !state.ok) {
     state.hardBlocked = true;
     const cooldown = Math.min(QUICK_COOLDOWN_MAX_MS, QUICK_COOLDOWN_MS * 2 ** state.cycles);
@@ -784,6 +793,8 @@ async function attemptOnce(url, { strategy, deadline, host, state, quick, waitUn
       let title = await page.title().catch(() => '');
       let markers = await challengeMarkers(page);
       const textLen = (body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().length;
+      // Boş yarılmış sayfa = gezinme tamamlanmadı (tarayıcı/ağ), duvar değil.
+      if (!textLen) throw new Error('navigation incomplete (empty body)');
 
       // Kritik: yalnız İÇERİK İNCE ise challenge sayfası sayılır. Haber metni
       // "verify you are human" gibi kalıpları içerebilir; o sayfalar çözülmüş sayılır.

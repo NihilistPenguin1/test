@@ -45,7 +45,7 @@ jobs:
           TELGRAF_HEADFUL: "1"
           # Cloudflare/DataDome çözmesi tek başına ~12 sn sürebiliyor: URL bütçesi
           # 30 sn, toplam süre aşama bütçeleriyle sınırlı.
-          TELGRAF_STEALTH_TIMEOUT: "30000"
+          TELGRAF_STEALTH_TIMEOUT: "45000"
           TELGRAF_STEALTH_CHALLENGE_WAIT: "16000"
           # Kurtarma turu (Wayback kopyası / tel aynası / beklemeli jina):
           # duvarlı yayıncılarda kapsamı artıran üçüncü geçiş. Süreleri sınırlı,
