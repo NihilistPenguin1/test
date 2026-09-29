@@ -244,7 +244,19 @@ async function main() {
     } catch { /* varsayılanlarla devam: teşhis yardımı derlemeyi düşürmez */ }
     // iki katı işçi: bir kısmı kuyrukta beklerken sayfalar boş kalmasın
     const browserWorkers = Math.max(4, cap.pages * 2);
-    await mapLimit(deferred, browserWorkers, (it) => runFullText(it, { http: false, stealthTimeoutMs: cap.urlBudgetMs }));
+    // Nöbetleşe sıra: aynı hostun haberleri arka arkaya dizilirse o hostun ilk
+    // redleri diğerlerinin tarayıcı şansını yiyor (run 25'te AP böyle boğuldu).
+    const buckets = new Map();
+    for (const it of deferred) {
+      let host = '?';
+      try { host = new URL(it.link).hostname.replace(/^www\./, ''); } catch { /* bilinmeyen */ }
+      if (!buckets.has(host)) buckets.set(host, []);
+      buckets.get(host).push(it);
+    }
+    const spread = [];
+    const groups = [...buckets.values()];
+    while (groups.some((g) => g.length)) for (const g of groups) if (g.length) spread.push(g.shift());
+    await mapLimit(spread, browserWorkers, (it) => runFullText(it, { http: false, stealthTimeoutMs: cap.urlBudgetMs }));
   }
   const hostSummary = [...hostStats.entries()]
     .sort((a, b) => (b[1].fail - a[1].fail) || (b[1].ok + b[1].fail) - (a[1].ok + a[1].fail))

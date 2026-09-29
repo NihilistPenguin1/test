@@ -76,6 +76,7 @@ export function stealthStats() {
       hardBlocked: !!s.hardBlocked,
       ok: s.ok,
       fail: s.fail,
+      attempted: s.attempted,
     })),
   };
 }
@@ -101,7 +102,7 @@ function getHostState(url) {
   if (!hostState.has(host)) {
     hostState.set(host, {
       cleared: false, hardBlocked: false, quickUntil: 0, cycles: 0,
-      pool: null, ok: 0, fail: 0,
+      pool: null, ok: 0, fail: 0, attempted: 0,
     });
   }
   return { host, state: hostState.get(host) };
@@ -134,6 +135,10 @@ async function acquireSlotFrom(c, limit, waitMs) {
   }
 }
 
+// Deneme sayısı yüksek, başarı sıfır ve en az üç vazgeçme devresi geçmiş host.
+const GIVEUP_ATTEMPTS = Number(process.env.TELGRAF_STEALTH_GIVEUP_ATTEMPTS || 20);
+const unwinnable = (s) => !s.ok && s.attempted >= GIVEUP_ATTEMPTS && s.cycles >= 3;
+
 /**
  * Çağıran taraf (build) kuyruğu boşuna meşgul etmesin: hosttan vazgeçildiyse
  * ya da kesim geçildiyse buradan önce sor — yoksa her haber sıraya girer ve
@@ -145,9 +150,10 @@ export function stealthShouldSkip(url) {
   if (elapsedMs() > WALL_CLOCK_MS) return 'wall-clock cutoff';
   const s = getHostState(url).state;
   if (s.hardBlocked && s.quickUntil > Date.now()) return 'host given up';
-  // İki devrede de hiçbir şey çıkmadıysa bu host artık bu derlemede denemez:
-  // 69 haberlik Reuters kuyruğu, şansı olan AP/France24/Sky'ı düşürüyordu.
-  if (s.cycles >= 2 && !s.ok) return 'host unwinnable';
+  // Çok deneme + tek içerik: bu host bu derlemede kuyruğu meşgul etmesin
+  // (Reuters 70 haberle kuyruğu şişirip şansı olan AP/France24'ü düşürüyordu).
+  // Eşik yüksek tutulur: erken birkaç red hostu vazgeçilmez saymaz (AP vakası).
+  if (unwinnable(s)) return 'host unwinnable';
   return '';
 }
 
@@ -644,8 +650,8 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
   // quick: bu hostta tam çözüm son denemede de işlemedi → tek/hızlı deneme.
   // Kalıcı değil: cooldown süresince tekrar tam deneme şansı doğar.
   const quick = state.hardBlocked && state.quickUntil > Date.now();
-  if (state.hardBlocked && !quick && state.cycles < 2) { state.hardBlocked = false; state.fail = 0; }
-  if (state.cycles >= 2 && !state.ok) {
+  if (state.hardBlocked && !quick && !unwinnable(state)) { state.hardBlocked = false; state.fail = 0; }
+  if (unwinnable(state)) {
     stats.budgetSkips++;
     throw new Error(`stealth skipped (${host}): unwinnable`);
   }
@@ -680,6 +686,7 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
       if (Date.now() > deadline) break;
       if (!withinBudget(scope)) { stats.budgetSkips++; break; }
       attempted = true;
+      state.attempted += 1;
       stats.attempts++;
       try {
         const result = await attemptOnce(url, { ...opts, strategy, deadline, host, state, quick });
