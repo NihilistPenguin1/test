@@ -41,6 +41,27 @@ public/   Vanilla JS frontend (bağımlılıksız, hızlı)
 data/     Ağ kapalıyken kullanılan gerçek haber tohumu (94 haber)
 ```
 
+## Ayarlar (ortam değişkenleri)
+
+Hepsi opsiyoneldir; varsayılanlar GitHub Actions koşucusuna (4 vCPU) göre ayarlıdır.
+
+| Değişken | Varsayılan | Ne yapar |
+| --- | --- | --- |
+| `TELGRAF_HTTP_HOST_TOTAL` | 6 | Bir yayıncıya toplam eşzamanlı istek (tüm şeritler birlikte) — duvar/429 davet etmeyen üst sınır |
+| `TELGRAF_HTTP_LANE_PAGE` / `_PAGE_HOST` | 40 / 4 | Makale+oembed+jina şeridi: süreç ve host başına slot |
+| `TELGRAF_HTTP_LANE_IMAGE` / `_IMAGE_HOST` | 56 / 4 | Görsel denetimi şeridi — makale şeridinden bağımsız, birbirini bekletmezler |
+| `TELGRAF_HTTP_LANE_FEED` / `_FEED_HOST` | 16 / 2 | RSS/Atom şeridi |
+| `TELGRAF_HTTP_HOST_MIN_GAP` | 150 (ms) | Aynı hosta iki istek arası nefes |
+| `TELGRAF_HTTP_WALL_TTL` | 2 (dk) | Art arda 3 redden sonra doğrudan çekimin atlanma süresi (tarayıcı denenmeye devam eder) |
+| `TELGRAF_FULL_TEXT_LIMIT` | 300 | Önceden hazırlanacak tam metin sayısı (`0` = tümü) |
+| `TELGRAF_STEALTH` | 1 | Tarayıcı katmanı; `0` = kapalı |
+| `TELGRAF_STEALTH_TIMEOUT` | 45000 (ms) | URL başına tarayıcı bütçesi |
+| `TELGRAF_STEALTH_CHALLENGE_WAIT` | 12000 (ms) | Captcha geçmesi için bekleme turu süresi |
+| `TELGRAF_STEALTH_CONCURRENCY` | min(6, vCPU) | Açık tarayıcı sayfası |
+| `TELGRAF_STEALTH_HOST_CONCURRENCY` | min(4, vCPU) | Host başına paralel sayfa (ısınmış oturum paylaşılır) |
+| `TELGRAF_STEALTH_WALL_MS` | 420000 (7 dk) | Duvar saati kesimi: derlemeyi bekletmemek için tarayıcı işini kapatır |
+| `TELGRAF_STEALTH_QUICK_COOLDOWN[_MAX]` | 240000 / 2700000 (ms) | Duvarlı hostta tam denemeye dönüşün seyrekleşme aralığı |
+
 ## Çalıştırma
 
 ```bash

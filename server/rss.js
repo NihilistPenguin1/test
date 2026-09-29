@@ -16,6 +16,7 @@ const parser = new XMLParser({
 export async function fetchText(url, timeoutMs = FETCH_TIMEOUT_MS) {
   const res = await fetchPage(url, {
     timeoutMs,
+    lane: 'feed', // beslemeler makale çekimini bekletmesin
     headers: {
       'User-Agent': USER_AGENT,
       Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',

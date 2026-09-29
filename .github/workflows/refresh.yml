@@ -1,9 +1,9 @@
 name: Gece Haber Yenile
 
 # Her gece Türkiye saatiyle 00:00'da (UTC+3 → 21:00 UTC) haberleri tazeleyip
-# statik siteyi GitHub Pages'e yayar. Dal itişinde ve Actions sekmesinden elle de
-# çalıştırılabilir. (Zamanlanmış tetikler yalnızca varsayılandan çalışır; push
-# tetikleyicisi bu dal için de canlı yayın sağlar.)
+# statik siteyi GitHub Pages'e yayar. main itişinde ve Actions sekmesinden elle de
+# çalıştırılabilir. (Zamanlanmış tetikler yalnızca varsayılan daldan çalışır.
+# Eski arena/* dal tetikleyicileri, o dallar silindiği için kaldırıldı.)
 on:
   schedule:
     - cron: '0 21 * * *'
@@ -11,9 +11,6 @@ on:
   push:
     branches:
       - main
-      - arena/01a0e8f9-test
-      - arena/01a0ec10-test
-      - arena/01a0ec2f-test
 
 permissions:
   contents: read
@@ -46,7 +43,10 @@ jobs:
         env:
           TELGRAF_CHROME: /usr/bin/google-chrome
           TELGRAF_HEADFUL: "1"
-          TELGRAF_STEALTH_TIMEOUT: "12000"
+          # Cloudflare/DataDome çözmesi tek başına ~12 sn sürebiliyor: URL bütçesi
+          # 30 sn, toplam süre aşama bütçeleriyle sınırlı.
+          TELGRAF_STEALTH_TIMEOUT: "30000"
+          TELGRAF_STEALTH_CHALLENGE_WAIT: "16000"
         run: xvfb-run -a node scripts/build-static.mjs
 
       - name: Pages arşivi yükle

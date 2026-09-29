@@ -11,7 +11,7 @@
 import sanitizeHtml from 'sanitize-html';
 import { USER_AGENT, SOURCE_BY_ID } from './config.js';
 import { fetchText } from './rss.js';
-import { fetchPage, noteHostFailure, noteHostSuccess, isHostBlocked } from './http.js';
+import { fetchPage, isDirectFutile, wallReason, noteWall, noteSkip } from './http.js';
 import { stealthEnabled, stealthFetchHtml, stealthResolveGoogleNews, stealthStats } from './stealth.js';
 
 const JINA_PREFIX = 'https://r.jina.ai/';
@@ -23,9 +23,17 @@ const googleUrlCache = new Map(); // google news link -> gerçek makale URL
 const articleCache = new Map();   // id -> { at, data }
 const ARTICLE_TTL = 24 * 60 * 60 * 1000;
 
-// Eşzamanlılık artık http.js içinde (host başına slot + fail-fast blok listesi);
-// aynı yayıncıya seri bindirmeyi oradaki sayaç yönetir.
+// Eşzamanlılık ve host sayacı http.js'te (şerit + duvar hatırası). Doğrudan
+// çekim, host düz HTTP'yi art arda reddettiyse HİÇ denemez: her makalede
+// 7-12 sn boşuna beklemek yerine vakit tarayıcı katmanına harcanır.
 async function fetchHtml(url, timeoutMs = 7000, attempt = 0) {
+  if (isDirectFutile(url)) {
+    noteSkip();
+    const error = new Error(`direct fetch skipped (${wallReason(url)})`);
+    error.skipped = true;
+    error.status = 0;
+    throw error;
+  }
   const res = await fetchPage(url, {
     timeoutMs,
     headers: {
@@ -36,26 +44,54 @@ async function fetchHtml(url, timeoutMs = 7000, attempt = 0) {
   if (!res.ok) {
     const error = new Error(`HTTP ${res.status}`);
     error.status = res.status;
+    error.wall = true;
     if (res.status === 429 && attempt < 1) {
       // Tekrar deneme: Retry-After yoksa kısa geri çekilme
       const ra = Number(res.headers?.['retry-after'] || 0);
       await sleep(Math.min(8000, (ra > 0 ? ra * 1000 : 1500) + Math.floor(Math.random() * 700)));
       return fetchHtml(url, timeoutMs, attempt + 1);
     }
-    noteHostFailure(url);
     throw error;
   }
-  noteHostSuccess(url);
+  // 200 dönen challenge sayfası da duvardır: boşuna tekrar denemeyelim
+  if (isChallengeResponse(res.body)) noteWall(url, 'challenge');
   return { html: res.body, finalUrl: res.finalUrl || url };
 }
 
+// r.jina.ai kendi başına bir yayıncı gibi davranır: IP'mizi reddettiği hostta
+// her makalede 15 sn kaybettirir, o yüzden onun için ayrı sayaç tutulur.
+const jinaWall = new Map(); // host -> unutulma zamanı
+const JINA_TTL_MS = 3 * 60 * 1000;
+
+function hostOf(url) {
+  try { return new URL(url).host.toLowerCase(); } catch { return ''; }
+}
+
+function jinaFutile(url) {
+  const until = jinaWall.get(hostOf(url)) || 0;
+  return until > Date.now();
+}
+
 async function fetchJina(url, timeoutMs = 15000) {
+  if (jinaFutile(url)) {
+    noteSkip();
+    throw new Error('jina skipped (host previously rejected)');
+  }
   const res = await fetchPage(JINA_PREFIX + url, {
     timeoutMs,
     accept: 'text',
     headers: { Accept: 'text/plain' },
   });
-  if (!res.ok) throw new Error(`jina HTTP ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403 || res.status === 429) {
+      jinaWall.set(hostOf(url), Date.now() + JINA_TTL_MS);
+    }
+    throw new Error(`jina HTTP ${res.status}`);
+  }
+  if (isChallengeResponse(res.body)) {
+    jinaWall.set(hostOf(url), Date.now() + JINA_TTL_MS);
+    throw new Error('jina returned a security challenge');
+  }
   return res.body;
 }
 
@@ -66,9 +102,19 @@ const isGoogleHost = (h) => /(?:^|\.)(google|googleapis|gstatic|googleuserconten
 
 /** Tanımlı erişim challenge'larını içerikten saptar; challenge'ı çözmeye çalışmaz. */
 export function isChallengeResponse(body) {
-  const text = String(body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
-  return /performing security verification|verifying the device|verify (?:that )?you are human|checking your browser|security check\s*[-–—:]?\s*please wait|complete the security check/i.test(text);
+  const raw = String(body || '');
+  const text = raw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+  if (CHALLENGE_RE.test(text)) return true;
+  // Duvar işareti yalnızca etiket niteliğinde geçiyorsa (script src, div id) belge
+  // İNCE olmalı: gerçek bir haber metninde bu adlar geçmez, yanlış pozitifi keser.
+  return text.trim().length < 800 && WALL_ATTR_RE.test(raw);
 }
+
+/** Kaynak içindeki duvar işaretleri (yalnız ince belgede güvenilir). */
+const WALL_ATTR_RE = /datadome|captcha-delivery|perimeterx|px-captcha|__cf_chl|human-verify|geo\.captcha-delivery|areyouahuman/i;
+
+/** Yayıncının bot duvarı imzaları (Cloudflare + DataDome/PerimeterX/decentrx). */
+const CHALLENGE_RE = /performing security verification|verifying the device|verify (?:that )?you are human|checking your browser|security check\s*[-–—:]?\s*please wait|complete the security check|please enable js and disable any ad blocker|enable javascript and cookies to continue|access to this page has been denied|blocked by (?:network )?security|are you a robot|unusual traffic from your|datadome|captcha-delivery|px-captcha|real person captcha|geo\.captcha-delivery|perimeterx|human verification/i;
 
 /** Yalnız AP ve Reuters Google News çözümlerinde yayıncı alan adı eşleşmesi zorunludur. */
 export function isExpectedPublisherUrl(sourceId, value) {
@@ -442,6 +488,7 @@ async function oembedImage(realUrl) {
   try {
     const u = new URL(realUrl);
     const api = `https://${u.hostname}/wp-json/oembed/1.0/embed?url=${encodeURIComponent(realUrl)}`;
+    if (isDirectFutile(api)) { noteSkip(); return ''; }
     const txt = await fetchText(api, 8000);
     const j = JSON.parse(txt);
     return j.thumbnail_url || '';
@@ -505,7 +552,8 @@ export async function extractOgImage(link, sourceId = '') {
     blocked = isChallengeResponse(html) || !isExpectedPublisherUrl(sourceId, finalUrl);
     if (!blocked) img = pickBestImage(html, finalUrl);
   } catch (error) {
-    blocked = [403, 429].includes(error.status);
+    // duvar hatırası nedeniyle atlanmışsa da tarayıcı katmanı devreye girer
+    blocked = error.skipped || [401, 403, 429].includes(error.status);
   }
   // 2) Challenge/blok durumunda stealth tarayıcı ile görsel arama
   if (!img && blocked && stealthEnabled()) {
@@ -712,7 +760,16 @@ async function readabilityFromHtml(html, finalUrl, item) {
   return Promise.reject(err);
 }
 
-export async function fetchArticle(item) {
+/**
+ * Makaleyi getirir. Aşamalar ayrılabilir, çünkü HTTP geçişi ucuz ve yüksek
+ * eşzamanlılıkla koşar; tarayıcı geçişi pahalıdır ve kuyruğu HTTP işleriyle
+ * meşgul etmemelidir:
+ *   { browser: false } → yalnız düz HTTP + jina
+ *   { http: false }    → yalnız stealth tarayıcı (önceki turda takılanlar için)
+ */
+export async function fetchArticle(item, phases = {}) {
+  const wantHttp = phases.http !== false;
+  const wantBrowser = phases.browser !== false;
   const cached = articleCache.get(item.id);
   if (cached && Date.now() - cached.at < ARTICLE_TTL) return cached.data;
   if (!isGoogleNewsArticleUrl(item.link) && !isExpectedPublisherUrl(item.source, item.link)) {
@@ -730,6 +787,7 @@ export async function fetchArticle(item) {
 
   // 1) Doğrudan çekim + Readability
   try {
+    if (!wantHttp) throw new Error('http phases skipped in browser pass');
     // jsdom tembel yüklenir: ortamda bozuksa süreç çökmez, jina katmanına düşer
     const { html, finalUrl } = await fetchHtml(realUrl, 12000);
     if (isChallengeResponse(html)) {
@@ -754,12 +812,13 @@ export async function fetchArticle(item) {
     failures.push(`direct: ${e.message}`);
     e.status && failures.push(`status: ${e.status}`);
 
-    // 2) Stealth tarayıcı — challenge/403/429/kısa içerik/ağ hatasında agresif deneme
-    // (http.js'teki host bloğu yalnızca tarayıcı açmanın boşuna olduğu durumda atlar)
-    if (stealthEnabled() && !isHostBlocked(realUrl)) {
+    // 2) Stealth tarayıcı — düz HTTP'nin işlemediği HER durumda denenir.
+    // (401/403 tam da tarayıcının çözdüğü sinyaldir; burayı host sayacıyla
+    //  kapatmak, duvarlı yayıncılarda tarayıcıyı tamamen devre dışı bırakıyordu.)
+    if (stealthEnabled() && wantBrowser) {
       stealthAttempted = true;
       try {
-        const page = await stealthFetchHtml(realUrl);
+        const page = await stealthFetchHtml(realUrl, phases.stealthTimeoutMs ? { timeoutMs: phases.stealthTimeoutMs } : {});
         if (isChallengeResponse(page.html)) {
           failures.push('stealth: challenge page');
         } else if (!isExpectedPublisherUrl(item.source, page.finalUrl)) {
@@ -780,6 +839,7 @@ export async function fetchArticle(item) {
 
     // 3) Metin yedeği (jina) — son çare; challenge yanıtı olsa bile denenir (farklı IP)
     try {
+      if (!wantHttp) throw new Error('jina already tried in http pass');
       const md = await fetchJina(realUrl, 18000);
       if (isChallengeResponse(md)) throw new Error('text fallback returned a security challenge');
       const meta = parseJinaMeta(md);
@@ -814,7 +874,8 @@ export async function fetchArticle(item) {
 export function classifyFailures(failures, firstError = {}, stealthAttempted = false) {
   const all = failures.join(' ').toLowerCase();
   if (firstError.reason === 'challenge' || /security challenge|challenge page/.test(all)) return 'challenge';
-  if (firstError.status === 403 || /http 403/.test(all)) return 'http403';
+  if (firstError.skipped || /fetch skipped/.test(all)) return 'wall-skip';
+  if (firstError.status === 403 || firstError.status === 401 || /http 403|http 401/.test(all)) return 'http403';
   if (firstError.status === 429 || /http 429/.test(all)) return 'http429';
   if (/too short/.test(all)) return 'too-short';
   if (/timeout|aborted|etimedout|econnreset|enotfound|econnrefused/.test(all)) return 'network';

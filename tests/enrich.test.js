@@ -4,7 +4,7 @@ process.env.TELGRAF_STEALTH = '0';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setHttpClient, resetHttpClient } from '../server/http.js';
+import { setHttpClient, resetHttpClient, resetHostState } from '../server/http.js';
 import {
   isChallengeResponse,
   isExpectedPublisherUrl,
@@ -18,6 +18,13 @@ import {
 test('detects the reported AP/Reuters security challenge labels', () => {
   assert.equal(isChallengeResponse('<title>Performing security verification</title>'), true);
   assert.equal(isChallengeResponse('<h1>Verifying the device</h1>'), true);
+});
+
+test('detects the DataDome/ad-blocker and Cloudflare block pages publishers return with 4xx', () => {
+  assert.equal(isChallengeResponse('<p>Please enable JS and disable any ad blocker</p>'), true);
+  assert.equal(isChallengeResponse('<div class="ddg-captcha">x</div><script src="https://geo.captcha-delivery.com/captcha/"></script>'), true);
+  assert.equal(isChallengeResponse('<h1>Access to this page has been denied</h1>'), true);
+  assert.equal(isChallengeResponse('<p>We have detected unusual traffic from your network.</p>'), true);
 });
 
 test('does not treat ordinary editorial text as an access challenge', () => {
@@ -57,6 +64,31 @@ test('recognizes screenshot proxy URLs so builds can report them', () => {
 
 test('does not label an ordinary publisher image as a screenshot proxy', () => {
   assert.equal(isScreenshotServiceUrl('https://apnews.com/hubfs/images/story.jpg'), false);
+});
+
+test('after repeated refusals the direct layer is skipped instead of retrying', async (t) => {
+  let urls = [];
+  t.after(() => { resetHttpClient(); resetHostState(); });
+  setHttpClient(async (url) => {
+    urls.push(url);
+    return { ok: false, status: 403, body: '<h1>Just a moment...</h1>', headers: {} };
+  });
+  const mk = (id) => ({ id, source: 'ap', link: `https://apnews.com/article/${id}` });
+  const counts = [];
+  for (let i = 1; i <= 3; i++) {
+    urls = [];
+    await assert.rejects(fetchArticle(mk(`w${i}`)), /HTTP 403/);
+    counts.push(urls.length);
+  }
+  // jina da ilk makalede reddedildi → sonrakilerde boşuna denenmez; doğrudan
+  // ise üçüncü redde duvar sayılır
+  assert.deepEqual(counts, [2, 1, 1], 'artan reddi: jina atlanır, sonra duvar eşiği dolar');
+
+  urls = [];
+  const err = await fetchArticle(mk('w4')).catch((e) => e);
+  assert.equal(urls.length, 0, 'dördüncü makalede ağa hiç çıkılmaz');
+  assert.match(err.message, /skipped/);
+  assert.equal(err.reason, 'wall-skip');
 });
 
 test('stops image fallbacks after a publisher security challenge', async (t) => {

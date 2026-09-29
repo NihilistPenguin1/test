@@ -21,7 +21,9 @@
 //   TELGRAF_CHROME=...          tarayıcı yolu (otomatik bulunur)
 //   TELGRAF_HEADFUL=1           başlıklı çalıştırır (Actions'ta xvfb ile)
 //   TELGRAF_STEALTH_TIMEOUT     URL başına bütçe (ms, varsayılan 45000)
-//   TELGRAF_STEALTH_BUDGET      tüm oturum bütçesi (ms, varsayılan 900000)
+//   TELGRAF_STEALTH_WALL_MS     tarayıcı işinin duvar saati kesimi (varsayılan 420000)
+//   TELGRAF_STEALTH_*_BUDGET    kapsam penceresi: o iş türünün ilk kullanımdan
+//                               itibaren kaç sn tarayıcıya izin verildiği (duvar saati)
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -41,6 +43,9 @@ const stats = {
   successes: 0,
   challengeSeen: 0,
   challengeCleared: 0,
+  challengeReloads: 0,
+  quickSkips: 0,
+  queueDrops: 0,
   budgetSkips: 0,
 };
 
@@ -54,6 +59,16 @@ export function stealthEnabled() {
 export function stealthStats() {
   return {
     ...stats,
+    hostPages: HOST_PAGES,
+    maxPages: MAX_PAGES,
+    queueDrops: stats.queueDrops,
+    wallMs: WALL_CLOCK_MS,
+    elapsedMs: Date.now() - moduleStartedAt,
+    windows: Object.fromEntries(Object.entries(scopeWindow).map(([k, v]) => {
+      const st = scopeStartedAt.get(k);
+      return [k, st ? `${Math.round((Date.now() - st) / 1000)}/${Math.round(v / 1000)}sn` : '-'];
+    })),
+    cycles: [...hostState.values()].reduce((a, h) => a + (h.cycles || 0), 0),
     budgetSpentMs: budgetSpent,
     hosts: [...hostState.entries()].map(([h, s]) => ({
       host: h,
@@ -65,28 +80,110 @@ export function stealthStats() {
   };
 }
 
+// Donanım başına eşzamanlılık: CI 4 vCPU/16GB, ince sandbox 2 vCPU/2GB.
+// Aşırı sayfa → bellek baskısı → "takılma"; o yüzden çekirdek sayısıyla sınırlı.
+const CPUS = os.cpus().length || 2;
+const HOST_PAGES = Number(process.env.TELGRAF_STEALTH_HOST_CONCURRENCY || Math.max(2, Math.min(4, CPUS)));
+// Duvarlı hostta tam denemeye dönüş giderek seyrekleşir (4→8→16→32→45 dk)
+const QUICK_COOLDOWN_MS = Number(process.env.TELGRAF_STEALTH_QUICK_COOLDOWN || 240000);
+const QUICK_COOLDOWN_MAX_MS = Number(process.env.TELGRAF_STEALTH_QUICK_COOLDOWN_MAX || 2700000);
+// Duvar saati kesimi: derleme ne kadar sürerse sürsün tarayıcı işi sonsuza
+// uzamasın (Actions işi 30 dk;Pages yayını bunu beklememeli).
+const WALL_CLOCK_MS = Number(process.env.TELGRAF_STEALTH_WALL_MS || process.env.TELGRAF_STEALTH_BUDGET || 420000);
+const moduleStartedAt = Date.now();
+
 function getHostState(url) {
   const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
-  if (!hostState.has(host)) hostState.set(host, { cleared: false, hardBlocked: false, queue: Promise.resolve(), ok: 0, fail: 0 });
+  if (!hostState.has(host)) {
+    hostState.set(host, {
+      cleared: false, hardBlocked: false, quickUntil: 0, cycles: 0,
+      pool: null, ok: 0, fail: 0,
+    });
+  }
   return { host, state: hostState.get(host) };
 }
 
-function withinBudget(scope = 'article') {
-  const total = Number(process.env.TELGRAF_STEALTH_BUDGET || 480000);
-  const limits = {
-    image: Number(process.env.TELGRAF_STEALTH_IMAGE_BUDGET || 120000),
-    resolve: Number(process.env.TELGRAF_STEALTH_RESOLVE_BUDGET || 180000),
-    article: Number(process.env.TELGRAF_STEALTH_ARTICLE_BUDGET || 240000),
-  };
-  return budgetSpent < total && (scopeSpent.get(scope) || 0) < (limits[scope] ?? limits.article);
+/**
+ * Süre aşımlı kuyruk: sıraya giren iş kendi URL bütçesini tüketiyorsa
+ * beklemekten vazgeçer. Beklemenin kendisi hostun suçu değildir.
+ */
+async function acquireSlotFrom(c, limit, waitMs) {
+  const start = Date.now();
+  for (;;) {
+    if (c.active < limit) { c.active += 1; return true; }
+    let wake;
+    const p = new Promise((r) => { wake = r; c.waiters.push(wake); });
+    const left = waitMs - (Date.now() - start);
+    if (left <= 0) {
+      const i = c.waiters.indexOf(wake);
+      if (i >= 0) c.waiters.splice(i, 1);
+      return false;
+    }
+    const t = setTimeout(() => wake('timeout'), left);
+    const r = await p;
+    clearTimeout(t);
+    if (r === 'timeout') {
+      const i = c.waiters.indexOf(wake);
+      if (i >= 0) c.waiters.splice(i, 1);
+      return false;
+    }
+  }
 }
 
+/** Derleyicinin kuyruk boyutunu buna göre ayarlaması için. */
+export function stealthCapacity() {
+  return {
+    pages: MAX_PAGES,
+    hostPages: HOST_PAGES,
+    urlBudgetMs: Number(process.env.TELGRAF_STEALTH_TIMEOUT || 45000),
+    remainingMs: Math.max(0, WALL_CLOCK_MS - (Date.now() - moduleStartedAt)),
+  };
+}
+
+/** Host içi eşzamanlılık: ısınmış oturum paylaşılır, ama bir makale diğerlerini bekletmez. */
+const hostPool = (state) => (state.pool ||= { active: 0, waiters: [] });
+
+async function acquireHost(state, waitMs) {
+  return acquireSlotFrom(hostPool(state), HOST_PAGES, waitMs);
+}
+
+function releaseHost(state) {
+  const p = hostPool(state);
+  p.active -= 1;
+  const next = p.waiters.shift();
+  if (next) next();
+}
+
+// Zaman kutuları DUVAR SAATİYLE ölçülür. Önceden kapsam başına biriken
+// süre kullanılıyordu; sayfalı eşzamanlılıkla aynı anda 4-6 iş koştuğu için
+// 171 sn'lik koşuda 2352 sn "harcanmış" gibi görünüp tarayıcı daha işi
+// bitmeden pes ediyordu. Şimdi: kapsam ilk kullanıldığından itibaren
+// limit kadar süre alır; paralellik limiti şişiremez.
+const scopeWindow = {
+  image: Number(process.env.TELGRAF_STEALTH_IMAGE_BUDGET || 240000),
+  resolve: Number(process.env.TELGRAF_STEALTH_RESOLVE_BUDGET || 300000),
+  article: Number(process.env.TELGRAF_STEALTH_ARTICLE_BUDGET || 360000),
+};
+const scopeStartedAt = new Map(); // kapsam -> ilk kullanım anı
+
+function withinBudget(scope = 'article') {
+  if (Date.now() - moduleStartedAt > WALL_CLOCK_MS) return false;
+  const start = scopeStartedAt.get(scope);
+  if (start === undefined) return true;
+  return Date.now() - start < (scopeWindow[scope] ?? scopeWindow.article);
+}
+
+function markScope(scope) {
+  if (!scopeStartedAt.has(scope)) scopeStartedAt.set(scope, Date.now());
+}
+
+/** Yalnız rapor: toplam meşguliyet (paralel işler üst üste biner). */
 function recordSpent(scope, ms) {
   budgetSpent += ms;
   scopeSpent.set(scope, (scopeSpent.get(scope) || 0) + ms);
 }
 
-const scopeSpent = new Map(); // kapsam -> ms (image / article / resolve)
+const scopeSpent = new Map(); // kapsam -> meşguliyet ms (image / article / resolve)
 
 /* ============================================================
    Tarayıcı edinimi
@@ -224,6 +321,11 @@ const CHALLENGE_PATTERNS = [
   /are you a robot\?/i,
   /enable javascript and cookies to continue/i,
   /additional verification required/i,
+  /please enable js and disable any ad blocker/i,
+  /access to this page has been denied/i,
+  /blocked by (?:network )?security/i,
+  /unusual traffic from your (?:network|ip|device)/i,
+  /datadome|captcha-delivery|perimeterx|human verification|press (?:&|and) hold/i,
 ];
 
 /** Sayfa gövdesi/başlığı challenge ekranına benziyor mu? */
@@ -246,6 +348,11 @@ const CHALLENGE_SELECTORS = [
   '.g-recaptcha',
   '#px-captcha',
   '[data-testid="challenge"]',
+  '#datadome',
+  '.ddg-captcha',
+  'iframe[src*="datadome"]',
+  'iframe[src*="captcha"] input[type="checkbox"]',
+  'div[style*="captcha"] iframe',
 ];
 
 async function challengeMarkers(page) {
@@ -347,40 +454,99 @@ async function pressAndHold(page) {
   }
 }
 
-/**
- * Challenge sayfasındayken geçmeyi dener: bekleme → tıklamalar → basılı tutma.
- * 'cleared' | 'still' döner. Hızlı tur: en fazla ~4 sn.
- */
-async function attemptChallengePass(page, deadline) {
-  stats.challengeSeen++;
-  // a) Kendiliğinden geçişi bekle (managed challenge temiz tarayıcıda geçer)
-  for (let i = 0; i < 4; i++) {
-    await sleep(700);
-    if (Date.now() > deadline) break;
-    const body = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
-    const title = await page.title().catch(() => '');
-    const markers = await challengeMarkers(page);
-    if (!markers.length && !looksLikeChallenge(body, title)) {
-      stats.challengeCleared++;
-      return 'cleared';
-    }
-    if (i === 0) await clickCheckboxish(page);
-    if (i === 1) await pressAndHold(page);
-    if (i === 2) {
-      await clickCheckboxish(page);
-      await pressAndHold(page);
-    }
-    await humanMove(page);
+/** Doğrulama sonrası oturumun gerçekten kurulduğunu gösteren çerezler. */
+// İyimser sinyal: çerez varsa yeniden iste — içerik gerçekten açılmış mı diye
+// çağıran taraf bakar (çerez tek başına içeriği kabul etmek için yeterli değil).
+const CLEARANCE_COOKIES = /cf_clear|datadome|pxc|_pxhd|awsWafToken/i;
+
+async function hasClearance(page) {
+  try {
+    // URL verilmezse puppeteer tüm bağlam çerezlerini döndürür
+    const cookies = await page.cookies().catch(() => []);
+    return (cookies || []).some((c) => CLEARANCE_COOKIES.test(c.name || ''));
+  } catch {
+    return false;
   }
-  // b) Son kontroller
-  await sleep(500);
+}
+
+async function pageChallengeState(page) {
   const body = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
   const title = await page.title().catch(() => '');
   const markers = await challengeMarkers(page);
-  if (!markers.length && !looksLikeChallenge(body, title)) {
-    stats.challengeCleared++;
-    return 'cleared';
+  const thin = (body || '').replace(/\s+/g, ' ').trim().length < 500;
+  return { interstitial: thin && (markers.length > 0 || looksLikeChallenge(body, title)), markers };
+}
+
+/**
+ * Turnstile/reCAPTCHA kutusuna GERÇEK fare olayıyla tıklarız: JS .click()
+ * bot sayılıyor, koordinatlı tıklama iframe içinde de çalışıyor.
+ */
+async function clickCaptchaBox(page) {
+  let hit = '';
+  for (const frame of page.frames()) {
+    try {
+      const el = await frame.$('input[type="checkbox"], #checkbox, [role="checkbox"], .cb-c, button');
+      if (!el) continue;
+      const box = await el.boundingBox().catch(() => null);
+      if (!box || box.width <= 0) continue;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 6 });
+      await sleep(rnd(60, 160));
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2, { delay: rnd(60, 180) });
+      hit = 'frame-click';
+      break;
+    } catch { /* çapraz kaynak çerçeve */ }
   }
+  if (hit) return hit;
+  // gömülü çerçevenin sol tarafındaki kutu: iframe konumundan tahmin et
+  try {
+    for (const el of await page.$$('iframe')) {
+      const box = await el.boundingBox().catch(() => null);
+      if (!box || box.width < 60 || box.height < 20) continue;
+      const x = box.x + 28;
+      const y = box.y + box.height / 2;
+      await page.mouse.move(x - 40, y - 20, { steps: 4 });
+      await page.mouse.move(x, y, { steps: 4 });
+      await page.mouse.click(x, y, { delay: rnd(60, 180) });
+      return 'iframe-coord-click';
+    }
+  } catch { /* yoksay */ }
+  return await clickCheckboxish(page);
+}
+
+/**
+ * Challenge sayfasındayken geçmeyi dener: bekleme → tıklama → basılı tutma →
+ * çerez kontrolü. Managed challenge + DataDome 5-20 sn sürebiliyor, o yüzden
+ * sabır URL bütçesiyle sınırlı ama varsayılan 12 sn.
+ * @returns {'cleared'|'still'}
+ */
+async function attemptChallengePass(page, deadline) {
+  stats.challengeSeen++;
+  const waitMs = Number(process.env.TELGRAF_STEALTH_CHALLENGE_WAIT || 12000);
+  const until = Math.min(deadline, Date.now() + waitMs);
+  let round = 0;
+  while (Date.now() < until) {
+    await sleep(round === 0 ? 900 : 800);
+    const st = await pageChallengeState(page);
+    if (!st.interstitial) {
+      stats.challengeCleared++;
+      return 'cleared';
+    }
+    // doğrulama çerezi kurulduysa DOM hâlâ aracı sayfada kalmış olsa bile
+    // yeniden istekte bulunmak gerekir (Cloudflare/DataDome bunu kendisi yapmaz)
+    if (await hasClearance(page)) {
+      if (!st.interstitial) stats.challengeCleared++;
+      return 'cleared';
+    }
+    if (round === 0) await clickCaptchaBox(page);
+    else if (round === 1) await pressAndHold(page);
+    else if (round === 2) { await clickCaptchaBox(page); await pressAndHold(page); }
+    else if (round === 3) await page.reload({ waitUntil: 'domcontentloaded', timeout: 8000 }).catch(() => {});
+    else if (round >= 4 && round % 2 === 0) await clickCaptchaBox(page);
+    await humanMove(page);
+    round++;
+  }
+  const st = await pageChallengeState(page);
+  if (!st.interstitial) { stats.challengeCleared++; return 'cleared'; }
   return 'still';
 }
 
@@ -439,47 +605,54 @@ export async function stealthFetchHtml(url, opts = {}) {
     if (/skipped for google news/.test(e.message)) throw e;
   }
   const { host, state } = getHostState(url);
-
-  // Host kuyruğu: aynı yayıncıya seri istek (ısınmış oturum + ban riski az)
-  const run = state.queue.then(() => stealthFetchHtmlInner(url, host, state, opts));
-  state.queue = run.catch(() => {});
-  return run;
+  return stealthFetchHtmlInner(url, host, state, opts);
 }
 
 // Genel eşzamanlılık: CI çekirdeğini ve yayıncıları yormamak için
-let stealthActive = 0;
-const stealthWaiters = [];
-async function acquireSlot() {
-  if (stealthActive < 4) { stealthActive++; return; }
-  await new Promise((r) => stealthWaiters.push(r));
-  stealthActive++;
-}
+const MAX_PAGES = Number(process.env.TELGRAF_STEALTH_CONCURRENCY || Math.max(2, Math.min(6, CPUS)));
+const globalPool = { active: 0, waiters: [] };
+const acquireSlot = (waitMs) => acquireSlotFrom(globalPool, MAX_PAGES, waitMs);
 function releaseSlot() {
-  stealthActive--;
-  const next = stealthWaiters.shift();
+  globalPool.active -= 1;
+  const next = globalPool.waiters.shift();
   if (next) next();
 }
 
 async function stealthFetchHtmlInner(url, host, state, opts) {
-  const perUrlBudget = Number(process.env.TELGRAF_STEALTH_TIMEOUT || 15000);
-  const quick = state.hardBlocked;
+  const perUrlBudget = Number(process.env.TELGRAF_STEALTH_TIMEOUT || 45000);
+  // quick: bu hostta tam çözüm son denemede de işlemedi → tek/hızlı deneme.
+  // Kalıcı değil: cooldown süresince tekrar tam deneme şansı doğar.
+  const quick = state.hardBlocked && state.quickUntil > Date.now();
+  if (state.hardBlocked && !quick) { state.hardBlocked = false; state.fail = 0; }
   const scope = opts.scope || 'article';
-  const started = Date.now();
-  const deadline = started + Math.min(opts.timeoutMs || perUrlBudget, quick ? 12000 : perUrlBudget);
-
+  // kesim yaklaştıysa yeni tarayıcı işi açma (host başarısız sayılmaz)
   if (!withinBudget(scope)) {
     stats.budgetSkips++;
-    throw new Error('stealth budget exhausted');
+    throw new Error(Date.now() - moduleStartedAt > WALL_CLOCK_MS ? 'stealth wall-clock cutoff' : 'stealth budget exhausted');
   }
+  markScope(scope);
+  const started = Date.now();
+  const deadline = started + Math.min(opts.timeoutMs || perUrlBudget, quick ? 12000 : perUrlBudget);
   // Duvarlı hostta her makalede uzun deneme yapma: tek hızlı deneme
   const strategies = quick ? ['quick'] : ['warm-context', 'fresh-context', 'mobile-context'];
 
   let lastError = 'not attempted';
-  await acquireSlot();
+  let attempted = false;
+  const waitMs = Math.max(1500, deadline - Date.now());
+  if (!(await acquireHost(state, waitMs))) {
+    stats.queueDrops++;
+    throw new Error(`stealth queue full (${host})`);
+  }
+  if (!(await acquireSlot(waitMs))) {
+    releaseHost(state);
+    stats.queueDrops++;
+    throw new Error(`stealth queue full (${host})`);
+  }
   try {
     for (const strategy of strategies) {
       if (Date.now() > deadline) break;
       if (!withinBudget(scope)) { stats.budgetSkips++; break; }
+      attempted = true;
       stats.attempts++;
       try {
         const result = await attemptOnce(url, { ...opts, strategy, deadline, host, state, quick });
@@ -488,6 +661,7 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
           state.ok++;
           state.cleared = true;
           state.hardBlocked = false;
+          state.fail = 0;
           recordSpent(scope, Date.now() - started);
           return { ...result, strategy };
         }
@@ -499,10 +673,22 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
     }
   } finally {
     releaseSlot();
+    releaseHost(state);
   }
 
+  // sırada/bütçede bekleyip hiç denemeyen iş hostu batırmaz
+  if (!attempted) {
+    recordSpent(scope, Date.now() - started);
+    throw new Error(`stealth not attempted (${host}): ${lastError}`);
+  }
   state.fail++;
-  if (state.fail >= 2 && !state.ok) state.hardBlocked = true;
+  if (state.fail >= 3 && !state.ok) {
+    state.hardBlocked = true;
+    const cooldown = Math.min(QUICK_COOLDOWN_MAX_MS, QUICK_COOLDOWN_MS * 2 ** state.cycles);
+    state.cycles += 1;
+    state.quickUntil = Date.now() + cooldown;
+    stats.quickSkips++;
+  }
   recordSpent(scope, Date.now() - started);
   throw new Error(`stealth failed (${host}): ${lastError}`);
 }
@@ -529,9 +715,10 @@ async function attemptOnce(url, { strategy, deadline, host, state, quick, waitUn
       });
     }
 
-    // Yayıncı ana sayfasında ısınma (cookie + referer)
+    // Yayıncı ana sayfasında ısınma (cookie + referer) — host zaten açıksa
+    // bu adım boşuna ~1-6 sn: ısınma yalnızca ilk temas için yapılır.
     let referer = '';
-    if (!quick && strategy !== 'mobile-context') {
+    if (!quick && strategy !== 'mobile-context' && !state.cleared) {
       try {
         const home = new URL(url).origin + '/';
         await page.goto(home, { waitUntil: 'domcontentloaded', timeout: Math.min(6000, Math.max(2000, deadline - Date.now())) });
@@ -569,6 +756,31 @@ async function attemptOnce(url, { strategy, deadline, host, state, quick, waitUn
           body = await page.evaluate(() => document.body?.innerHTML || '').catch(() => '');
           const t2 = (body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().length;
           if (t2 < 500 && looksLikeChallenge(body, await page.title().catch(() => ''))) continue; // sonraki çeşitleme
+        } else {
+          // KRİTİK: Cloudflare/DataDome aracı sayfayı yerinde bırakır — geçiş
+          // doğrulandıktan sonra makaleyi YENİDEN istemek gerekir.
+          stats.challengeReloads++;
+          await page.goto(candidate, {
+            waitUntil: 'domcontentloaded',
+            timeout: Math.min(12000, Math.max(3000, deadline - Date.now())),
+          }).catch(() => {});
+          await sleep(250);
+          body = await page.evaluate(() => document.body?.innerHTML || '').catch(() => '');
+          title = await page.title().catch(() => '');
+          const t3 = (body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().length;
+          // Cloudflare bazen ikinci turda bırakır: bir kez daha dene, sonra vazgeç
+          if (t3 < 500 && (await challengeMarkers(page)).length + (looksLikeChallenge(body, title) ? 1 : 0) > 0 && Date.now() < deadline - 4000) {
+            const again = await attemptChallengePass(page, deadline);
+            if (again === 'cleared') {
+              await page.goto(candidate, {
+                waitUntil: 'domcontentloaded',
+                timeout: Math.min(12000, Math.max(3000, deadline - Date.now())),
+              }).catch(() => {});
+              await sleep(250);
+              body = await page.evaluate(() => document.body?.innerHTML || '').catch(() => '');
+              title = await page.title().catch(() => '');
+            }
+          }
         }
         body = await page.evaluate(() => document.body?.innerHTML || '').catch(() => '');
         title = await page.title().catch(() => '');

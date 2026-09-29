@@ -83,7 +83,9 @@ const challengeHtml = (kind) => {
 
 function makeServer() {
   const hits = new Map();
-  const server = http.createServer((req, res) => {
+  let inflight = 0;
+  let peak = 0;
+  const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://localhost');
     const cookie = req.headers.cookie || '';
     const cleared = cookie.includes('cf_clear=1');
@@ -100,17 +102,28 @@ function makeServer() {
       return send(cleared ? articleHtml('Tiklamali Makale') : challengeHtml('click'));
     }
     if (u.pathname === '/hard') return send(challengeHtml('hard'));
+    // Çerez kurulsa bile sayfa YENİLENMEZ: çözüm sonrası yeniden istek atılmalı
+    if (u.pathname === '/reload') {
+      return send(cleared ? articleHtml('Yeniden Istekli Makale') : `${challengeHtml('click')}`.replace('location.reload();', 'void 0;'));
+    }
+    if (u.pathname === '/parallel') {
+      inflight += 1;
+      peak = Math.max(peak, inflight);
+      await new Promise((r) => setTimeout(r, 350));
+      inflight -= 1;
+      return send(articleHtml(`Paralel Makale ${u.searchParams.get('i') || ''}`));
+    }
     send('<h1>404</h1>', 404);
   });
-  return { server, hits };
+  return { server, hits, peak: () => peak };
 }
 
 let ctx;
 
 test.before(async () => {
-  const { server, hits } = makeServer();
+  const { server, hits, peak } = makeServer();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
-  ctx = { server, hits, base: `http://127.0.0.1:${server.address().port}` };
+  ctx = { server, hits, peak, base: `http://127.0.0.1:${server.address().port}` };
 });
 
 test.after(async () => {
@@ -144,6 +157,21 @@ test('gives up on an unpassable challenge but keeps stats', async () => {
   );
   const s = stealthStats();
   assert.ok(s.attempts >= 1);
+});
+
+test('re-requests the article when the challenge clears without a page reload', async () => {
+  // Farklı ana ad = taze çerez kavanozu (profil diğer testlerde ısındı)
+  const clean = ctx.base.replace('127.0.0.1', 'localhost');
+  const page = await stealthFetchHtml(`${clean}/reload`, { timeoutMs: 25000 });
+  assert.match(page.html, /Yeniden Istekli Makale/);
+  assert.ok(ctx.hits.get('/reload') >= 2, `doğrulama sonrası yeniden istek bekleniyordu, görülen: ${ctx.hits.get('/reload')}`);
+});
+
+test('same host is fetched with parallel pages instead of one serial queue', async () => {
+  const urls = Array.from({ length: 4 }, (_, i) => `${ctx.base}/parallel?i=${i}`);
+  const pages = await Promise.all(urls.map((u) => stealthFetchHtml(u, { timeoutMs: 25000 })));
+  assert.equal(pages.filter((p) => /Paralel Makale/.test(p.html)).length, 4);
+  assert.ok(ctx.peak() >= 2, `aynı hostta eşzamanlı sayfa bekleniyordu, görülen: ${ctx.peak()}`);
 });
 
 test('a cleared host is served fast on the next visit (warm session)', async () => {

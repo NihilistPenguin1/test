@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { getNews, getMarketData, getWeatherData } from '../server/store.js';
 import { enrichImages, fetchArticle, resolveGoogleBatch, isArticleUrl, isExpectedPublisherUrl, isGoogleNewsArticleUrl, isScreenshotServiceUrl } from '../server/enrich.js';
 import { SOURCES, CATEGORIES } from '../server/config.js';
+import { httpStats } from '../server/http.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -38,6 +39,7 @@ async function auditImageUrls(items) {
     try {
       const res = await fetchPage(url, {
         timeoutMs: 3500,
+        lane: 'image', // makale çekimini bekletmesin
         accept: 'text', // gövdeyi buffer yapma: yalnızca başlık bakılıyor
         headers: { Range: 'bytes=0-0' },
       });
@@ -168,7 +170,7 @@ async function main() {
 
   const imagesPromise = (async () => {
     try {
-      await enrichImages(items, 5000, 16);
+      await enrichImages(items, 5000, 24);
     } catch (e) {
       console.log(`  görsel zenginleştirme hatası: ${e.message}`);
     }
@@ -193,21 +195,46 @@ async function main() {
     if (!ok && reason) s.reasons.set(reason, (s.reasons.get(reason) || 0) + 1);
     hostStats.set(host, s);
   };
-  await mapLimit(fullTextItems, 32, async (it) => {
+  // İKİ GEÇİŞ: (1) ucuz ve hızlı HTTP turu 40 eşzamanlılıkla, (2) pahalı
+  // tarayıcı turu yalnız takılanlar için. Böylece tarayıcı kuyruğu HTTP
+  // işleriyle meşgul olmaz, HTTP de tarayıcıyı bekler; birbirlerini
+  // yavaşlatmazlar. Kaynak uyuşmazlığı olanlar tarayıcıya gitmez (politika).
+  let stealthOn = false;
+  try {
+    stealthOn = (await import('../server/stealth.js')).stealthEnabled();
+  } catch { stealthOn = false; }
+  const deferred = [];
+  const runFullText = async (it, phases) => {
     try {
-      const article = await fetchArticle(it);
+      const article = await fetchArticle(it, phases);
       if (article?.content) {
         fullDocs.push({ id: it.id, item: it, article });
-        fullOk++;
+        fullOk += 1;
         bump(it, true, article.via || '?');
-      } else {
-        bump(it, false, '', 'empty');
+        return;
       }
+      if (phases.browser === false && stealthOn) { deferred.push(it); return; }
+      bump(it, false, '', 'empty');
     } catch (e) {
-      bump(it, false, '', e.reason || 'other');
-      console.log(`  tam metin yok (${it.id}): ${String(e.message).slice(0, 80)}`);
+      const msg = String(e.message || '');
+      const fatal = e.reason === 'source-mismatch' || /does not match the card source/.test(msg);
+      if (!fatal && phases.browser === false && stealthOn) { deferred.push(it); return; }
+      bump(it, false, '', fatal ? 'source-mismatch' : (e.reason || 'other'));
+      console.log(`  tam metin yok (${it.id}): ${msg.slice(0, 80)}`);
     }
-  });
+  };
+  await mapLimit(fullTextItems, 40, (it) => runFullText(it, { browser: false }));
+  if (deferred.length) {
+    note(`tam metin: ${deferred.length} haber tarayıcı turuna bırakıldı (HTTP: ${fullOk}/${fullTextItems.length - deferred.length})`);
+    let cap = { pages: 4, urlBudgetMs: 45000 };
+    try {
+      const { stealthCapacity } = await import('../server/stealth.js');
+      if (typeof stealthCapacity === 'function') cap = { ...cap, ...stealthCapacity() };
+    } catch { /* varsayılanlarla devam: teşhis yardımı derlemeyi düşürmez */ }
+    // iki katı işçi: bir kısmı kuyrukta beklerken sayfalar boş kalmasın
+    const browserWorkers = Math.max(4, cap.pages * 2);
+    await mapLimit(deferred, browserWorkers, (it) => runFullText(it, { http: false, stealthTimeoutMs: cap.urlBudgetMs }));
+  }
   const hostSummary = [...hostStats.entries()]
     .sort((a, b) => (b[1].fail - a[1].fail) || (b[1].ok + b[1].fail) - (a[1].ok + a[1].fail))
     .map(([h, s]) => {
@@ -229,7 +256,14 @@ async function main() {
   try {
     const { stealthStats, closeStealth } = await import('../server/stealth.js');
     const s = stealthStats();
-    stealthLine = `stealth: denenen=${s.attempts} başarılı=${s.successes} challenge=${s.challengeSeen} geçen=${s.challengeCleared} bütçe=${Math.round(s.budgetSpentMs / 1000)}sn duvarlı=${s.hosts.filter((h) => h.hardBlocked).map((h) => h.host).join(',') || 'yok'}`;
+    const h = httpStats();
+    const walls = Object.entries(h.perHost || {})
+      .filter(([, v]) => v.until)
+      .map(([host, v]) => `${host}:${v.until}`)
+      .slice(0, 8)
+      .join(',');
+    stealthLine = `stealth: denenen=${s.attempts} başarılı=${s.successes} challenge=${s.challengeSeen} geçen=${s.challengeCleared} yeniden-istek=${s.challengeReloads} sıra-düşme=${s.queueDrops} ısırmaz=${s.quickSkips} devir=${s.cycles} meşgul=${Math.round(s.budgetSpentMs / 1000)}sn pencere=${Object.entries(s.windows || {}).map(([k, v]) => `${k}:${v}`).join(' ')} kesim=${Math.round(s.elapsedMs / 1000)}/${Math.round(s.wallMs / 1000)}sn sayfa=${s.maxPages}/host=${s.hostPages} duvarlı=${s.hosts.filter((x) => x.hardBlocked).map((x) => x.host).join(',') || 'yok'}`;
+    stealthLine += ` · http: istek=${h.requests} atlanan=${h.skipped} sıra=${h.waits}${walls ? ` duvar=[${walls}]` : ''} şerit=${Object.entries(h.byLane || {}).map(([k, v]) => `${k}=${v}`).join(',')}`;
     await closeStealth();
   } catch { /* stealth kapalı olabilir */ }
   note(`özet: piyasa=${market.items?.length || 0}kalem(live=${market.live}) hava(live=${weather.live}) · ${stealthLine} · süre=${Math.round((Date.now() - t0) / 1000)}sn`);
