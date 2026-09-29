@@ -62,6 +62,8 @@ const MAX_SEARCHES = int(process.env.TELGRAF_RESCUE_MAX_SEARCHES, 45);
 const FULL_CAPTURE = int(process.env.TELGRAF_RESCUE_FULL_CAPTURE, 2500);
 /** Ayna yolunda bir haber için en fazla kaç aday sayfası indirilir */
 const MIRROR_TRIES = int(process.env.TELGRAF_RESCUE_MIRROR_TRIES, 3);
+/** Aynı yeniden-yayıncıdan en fazla kaç aday sayfa indirilir */
+const PER_HOST = int(process.env.TELGRAF_RESCUE_PER_HOST, 2);
 /** Bu kadar haberden sonra ayna yolu o host için kapanır (boşuna aday indirmesin) */
 const MIRROR_MISS_AFTER = int(process.env.TELGRAF_RESCUE_MIRROR_MISS_AFTER, 6);
 /** Bir haber için arşive en fazla kaç yoklama (gecikme + kibarlık bütçesi) */
@@ -407,6 +409,9 @@ async function viaWayback(realUrl, item, host) {
  *    ("(Reuters)", "(AP)", "Associated Press") doğrulamanın kendisidir.
  */
 const WIRE_RE = /\((?:Reuters|AP|AFP|PA Media|Bloomberg|KYODO|DPA|ANI)\)|\b(?:Associated Press|Reuters Holdings|Thai (?:News|Agency)|Arab News \(Reuters\)|by the Associated Press)\b/i;
+/** Host → tel ajansı adı (arama sorgusuna eklenir; telif satırıyla doğrulanır) */
+const WIRE_NAME = { 'reuters.com': 'Reuters', 'apnews.com': 'AP' };
+
 const MIRROR_DENY = /blogspot\.|medium\.com|tumblr\.com|wordpress\.com|quora\.com|pinterest|facebook\.com|x\.com|reddit|joemygod|marginalia/i;
 
 function searchLinks(html) {
@@ -439,33 +444,51 @@ async function viaMirror(realUrl, item, host) {
   const title = item.title || '';
   if (keyTokens(title).length < 3) return EMPTY('başlık zayıf');
   state.searches += 1;
+  state.queries += 1;
   await nap(400); // arama motorunu zorlama
   let cands0 = [];
   let searchTitles = new Map();
   let transport = 0;
-  for (const base of SEARCHES) {
-    const s = await fetchPage(`${base}${encodeURIComponent(`"${title.slice(0, 90)}"`)}`, { timeoutMs: 15000, hostLane: 'page' });
-    if (!s.ok) { transport += 1; continue; }
-    const parsed = searchLinks(s.body);
-    cands0 = parsed.urls;
-    if (parsed.urls.length) { searchTitles = parsed.titles; break; }
+  // Sorgu ajans adıyla da denenir: yeniden-yayıncılar teli "(Reuters)"/"(AP)"
+  // damgasıyla ve başlığın ilk yarısıyla basar. Yalnız tırnaklı tam başlık,
+  // bizim için erişilmez olan yayıncının kendi sayfasını öne çıkarıyor.
+  const agency = WIRE_NAME[host] || '';
+  const queries = [`"${title.slice(0, 90)}"`];
+  if (agency) {
+    queries.push(`"${title.slice(0, 60)}" ${agency}`);
+    queries.push(`${title.slice(0, 60)} ${agency}`);
+  }
+  for (const q of queries) {
+    if (state.queries >= MAX_SEARCHES * 2) break; // arama motoruna sınırsız yük bindirme
+    if (q !== queries[0]) await nap(250);
+    state.queries += 1;
+    for (const base of SEARCHES) {
+      const s = await fetchPage(`${base}${encodeURIComponent(q)}`, { timeoutMs: 15000, hostLane: 'page' });
+      if (!s.ok) { transport += 1; continue; }
+      const parsed = searchLinks(s.body);
+      cands0 = parsed.urls;
+      if (parsed.urls.length) { searchTitles = parsed.titles; break; }
+    }
+    if (cands0.length) break;
   }
   if (!cands0.length) {
     // Motorların hepsi patladıysa yol ölü; boş döndüyse haberde ayna yok
     return transport >= SEARCHES.length ? DOWN(`arama ${transport}/${SEARCHES.length}`) : EMPTY('ayna adayı yok');
   }
   const self = hostOf(realUrl);
-  // Önce sırala: URL'si başlıkla en çok kelime paylaşan aday en önce. Böylece host
-  // başına tek deneme hakkı (yayıncıya yüklenmemek için) en makul adaya gider.
+  // Önce sırala: URL'si başlıkla en çok kelime paylaşan aday en önce gider.
   const ranked = cands0
     .map((u) => ({ u, h: hostOf(u), score: titleOverlap(title, decodeURIComponent(String(u).replace(/^https?:\/\/[^/]+/, '').replace(/\?.*$/, ''))) }))
     .filter((x) => x.h && x.h !== self && !RESCUABLE_HOSTS.has(x.h) && !MIRROR_DENY.test(x.h))
     .sort((a, b) => b.score - a.score);
-  const usedHosts = new Set();
+  const perHost = new Map();
   const cands = [];
   for (const x of ranked) {
-    if (usedHosts.has(x.h)) continue;
-    usedHosts.add(x.h);
+    // Host başına en fazla 2 aday: sıralama doğru haberi her zaman öne
+    // çıkarmıyor, ama aynı yayıncıya da yüklenmiyoruz.
+    const n = perHost.get(x.h) || 0;
+    if (n >= PER_HOST) continue;
+    perHost.set(x.h, n + 1);
     cands.push(x.u);
     if (cands.length >= 4) break;
   }
