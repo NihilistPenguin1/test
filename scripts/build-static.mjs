@@ -6,7 +6,7 @@ import { mkdir, writeFile, cp, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getNews, getMarketData, getWeatherData } from '../server/store.js';
-import { enrichImages, fetchArticle, resolveGoogleBatch, isArticleUrl, isExpectedPublisherUrl, isScreenshotServiceUrl } from '../server/enrich.js';
+import { enrichImages, fetchArticle, resolveGoogleBatch, isArticleUrl, isExpectedPublisherUrl, isGoogleNewsArticleUrl, isScreenshotServiceUrl } from '../server/enrich.js';
 import { SOURCES, CATEGORIES } from '../server/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -106,13 +106,22 @@ async function main() {
     console.log(`  google news çözümü başarısız: ${e.message}`);
   }
 
-  // Google CSS/asset gibi kazara çözülen veya bozuk RSS linklerini yayına sokma.
-  const badLinks = items.filter((it) => !isStoryLink(it.link));
+  // Bozuk ve AP/Reuters yayıncı alan adıyla uyuşmayan doğrudan linkleri yayına sokma.
+  const badLinks = items.filter((it) => !isStoryLink(it.link)
+    || (['ap', 'reuters'].includes(it.source)
+      && !isGoogleNewsArticleUrl(it.link)
+      && !isExpectedPublisherUrl(it.source, it.link)));
   if (badLinks.length) {
     const badIds = new Set(badLinks.map((it) => it.id));
     for (let i = items.length - 1; i >= 0; i--) if (badIds.has(items[i].id)) items.splice(i, 1);
   }
   note(`makale bağlantıları: ${items.length} geçerli, ${badLinks.length} hatalı kayıt ayıklandı`);
+  const publisherItems = items.filter((it) => ['ap', 'reuters'].includes(it.source));
+  const publisherMatched = publisherItems.filter((it) => !isGoogleNewsArticleUrl(it.link)
+    && isExpectedPublisherUrl(it.source, it.link)).length;
+  const googleFallbacks = publisherItems.filter((it) => isGoogleNewsArticleUrl(it.link)).length;
+  const publisherMismatches = publisherItems.length - publisherMatched - googleFallbacks;
+  note(`AP/Reuters yayıncı link denetimi: toplam=${publisherItems.length}, eşleşen=${publisherMatched}, Google News yedeği=${googleFallbacks}, alan adı uyuşmazlığı=${publisherMismatches}`);
 
   // Eksik kapak görsellerini challenge-duyarlı görsel motoruyla tamamla (HEPSİ)
   try {

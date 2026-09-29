@@ -145,6 +145,10 @@ function findRedirectTarget(html) {
 
 const decodeParamsCache = new Map(); // article id -> {direct|sig+ts}
 
+export function isGoogleNewsArticleUrl(value) {
+  return Boolean(googleArticleId(value));
+}
+
 /**
  * Google News makale sayfasından imza (data-n-a-sg) + zaman damgası (data-n-a-ts)
  * çıkarır. Bu ikili, batchexecute RPC ile gerçek URL'yi almak için gereklidir.
@@ -473,6 +477,10 @@ function firstMarkdownImage(md) {
 export async function extractOgImage(link, sourceId = '') {
   const cacheKey = `${sourceId}:${link}`;
   if (ogCache.has(cacheKey)) return ogCache.get(cacheKey);
+  if (!isGoogleNewsArticleUrl(link) && !isExpectedPublisherUrl(sourceId, link)) {
+    ogCache.set(cacheKey, '');
+    return '';
+  }
   let img = '';
   let realUrl = link;
   let blocked = false;
@@ -637,6 +645,9 @@ function parseJinaMeta(md) {
 export async function fetchArticle(item) {
   const cached = articleCache.get(item.id);
   if (cached && Date.now() - cached.at < ARTICLE_TTL) return cached.data;
+  if (!isGoogleNewsArticleUrl(item.link) && !isExpectedPublisherUrl(item.source, item.link)) {
+    throw new Error('publisher link does not match the card source');
+  }
 
   // Google News çözümünü yalnız yayıncı alan adıyla eşleşiyorsa kullan.
   const resolvedUrl = await resolveArticleUrl(item.link);

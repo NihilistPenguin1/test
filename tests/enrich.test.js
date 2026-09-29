@@ -4,8 +4,10 @@ import {
   isChallengeResponse,
   isExpectedPublisherUrl,
   isScreenshotServiceUrl,
+  isGoogleNewsArticleUrl,
   extractOgImage,
   enrichImages,
+  fetchArticle,
 } from '../server/enrich.js';
 
 test('detects the reported AP/Reuters security challenge labels', () => {
@@ -15,6 +17,11 @@ test('detects the reported AP/Reuters security challenge labels', () => {
 
 test('does not treat ordinary editorial text as an access challenge', () => {
   assert.equal(isChallengeResponse('<p>Security verification is part of our reporting.</p>'), false);
+});
+
+test('recognizes Google News article URLs but not generic Google News pages', () => {
+  assert.equal(isGoogleNewsArticleUrl('https://news.google.com/rss/articles/CBMiExampleArticle123'), true);
+  assert.equal(isGoogleNewsArticleUrl('https://news.google.com/search?q=apnews'), false);
 });
 
 test('accepts AP publisher host and its www subdomain', () => {
@@ -59,6 +66,18 @@ test('stops image fallbacks after a publisher security challenge', async (t) => 
   const image = await extractOgImage('https://apnews.com/challenge-test-article');
   assert.equal(image, '');
   assert.equal(requests, 1, 'no oEmbed, Jina, or screenshot request should follow');
+});
+
+test('refuses to fetch an AP card link hosted by a different publisher', async (t) => {
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    requests++;
+    throw new Error('unexpected network request');
+  });
+  const item = { id: 'ap-wrong-host', source: 'ap', link: 'https://reuters.com/world/wrong-story' };
+  await assert.rejects(fetchArticle(item), /does not match the card source/);
+  assert.equal(await extractOgImage(item.link, item.source), '');
+  assert.equal(requests, 0);
 });
 
 test('keeps an existing direct feed image without making requests', async (t) => {
