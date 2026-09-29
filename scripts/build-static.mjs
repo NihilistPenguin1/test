@@ -12,6 +12,7 @@ import { SOURCES, CATEGORIES } from '../server/config.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
+const FULL_TEXT_BUILD_LIMIT = 300;
 
 function mapLimit(arr, limit, fn) {
   const out = new Array(arr.length);
@@ -145,10 +146,12 @@ async function main() {
   note(`görsel denetimi (benzersiz URL; kart=${withImg}/${items.length}): toplam=${imageAudit.total}, doğrudan=${imageAudit.direct}, screenshot-proxy=${imageAudit.screenshot}, doğrulanan=${imageAudit.verified}, HTTP-hatası=${imageAudit.httpFailures}, görsel-olmayan=${imageAudit.nonImageResponses}, istek-hatası=${imageAudit.requestFailures}`);
   noteStage('görsel zenginleştirme ve denetim');
 
-  // Tam metinler (modal'da sitede okuma) — paralel, habere özel dayanıklılık
+  // Derlemeyi kısa tutmak ve kaynakları yormamak için en yeni 300 haberin tam metnini üret.
+  // Daha eski haberler kartta kalır; okuyucu kaynak yayına gidebilir.
+  const fullTextItems = items.slice(0, FULL_TEXT_BUILD_LIMIT);
   let fullOk = 0;
   const fullDocs = [];
-  await mapLimit(items, 10, async (it) => {
+  await mapLimit(fullTextItems, 10, async (it) => {
     try {
       const article = await fetchArticle(it);
       if (article?.content) {
@@ -159,7 +162,7 @@ async function main() {
       console.log(`  tam metin yok (${it.id}): ${String(e.message).slice(0, 80)}`);
     }
   });
-  note(`tam metin: ${fullOk}/${items.length}`);
+  note(`tam metin: ${fullOk}/${fullTextItems.length} denenen (en yeni ${fullTextItems.length}/${items.length})`);
   noteStage('tam metinler');
 
   // Piyasa + hava (sunucu tarafında çekim — tarayıcı CORS sorunu yok)
@@ -201,6 +204,7 @@ async function main() {
     news: items.length,
     withImage: withImg,
     imageAudit,
+    fullTextRequested: fullTextItems.length,
     fullTexts: fullOk,
     marketLive: !!market.live,
     weatherLive: !!weather.live,
