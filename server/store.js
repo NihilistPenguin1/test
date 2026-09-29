@@ -49,8 +49,8 @@ export async function getNews({ force = false } = {}) {
   }
 
   const feeds = SOURCES.flatMap((source) => source.feeds.map((feed) => ({ source, feed })));
-  // Feed sağlayıcılarına ölçülü yük: en fazla on eşzamanlı indirme.
-  const results = await mapLimit(feeds, 10, async ({ source, feed }) => {
+  // Feed sağlayıcılarına ölçülü yük: en fazla on altı eşzamanlı indirme.
+  const results = await mapLimit(feeds, 16, async ({ source, feed }) => {
     try {
       return { ok: true, items: await fetchFeed(feed, source) };
     } catch (e) {

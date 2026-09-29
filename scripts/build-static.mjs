@@ -12,7 +12,6 @@ import { SOURCES, CATEGORIES } from '../server/config.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const DIST = path.join(ROOT, 'dist');
-const FULL_TEXT_BUILD_LIMIT = 300;
 
 function mapLimit(arr, limit, fn) {
   const out = new Array(arr.length);
@@ -27,6 +26,7 @@ function mapLimit(arr, limit, fn) {
 }
 
 async function auditImageUrls(items) {
+  const { fetchPage } = await import('../server/http.js');
   const urls = [...new Set(items.map((item) => item.image).filter((url) => /^https?:\/\//i.test(url || '')))];
   const screenshot = urls.filter(isScreenshotServiceUrl).length;
   const directUrls = urls.filter((url) => !isScreenshotServiceUrl(url));
@@ -34,21 +34,19 @@ async function auditImageUrls(items) {
   let httpFailures = 0;
   let nonImageResponses = 0;
   let requestFailures = 0;
-  await mapLimit(directUrls, 24, async (url) => {
-    let response;
+  await mapLimit(directUrls, 48, async (url) => {
     try {
-      response = await fetch(url, {
+      const res = await fetchPage(url, {
+        timeoutMs: 3500,
+        accept: 'text', // gövdeyi buffer yapma: yalnızca başlık bakılıyor
         headers: { Range: 'bytes=0-0' },
-        signal: AbortSignal.timeout(4000),
       });
-      const contentType = response.headers.get('content-type') || '';
-      if (!response.ok) httpFailures++;
+      const contentType = String(res.headers?.['content-type'] || '');
+      if (!res.ok) httpFailures++;
       else if (/^image\//i.test(contentType)) verified++;
       else nonImageResponses++;
     } catch {
       requestFailures++;
-    } finally {
-      try { await response?.body?.cancel(); } catch { /* gövde zaten kapanmış olabilir */ }
     }
   });
   return {
@@ -131,7 +129,7 @@ async function main() {
     if (still.length) {
       console.log(`google news kalan: ${still.length} link tarayıcıyla çözülecek`);
       const { stealthResolveGoogleNews } = await import('../server/stealth.js');
-      await mapLimit(still, 4, async (it) => {
+      await mapLimit(still, 8, async (it) => {
         try {
           const real = await stealthResolveGoogleNews(it.link);
           if (real && isArticleUrl(real) && isExpectedPublisherUrl(it.source, real)) {
@@ -162,20 +160,27 @@ async function main() {
   const publisherMismatches = publisherItems.length - publisherMatched - googleFallbacks;
   note(`kaynaklar: haber=${items.length} (live=${news.live}, feed-hata=${news.errors?.length || 0}) · google-news: batch=${gnBatch}, stealth=${gnStealth}/${gnStill} · AP/Reuters: toplam=${publisherItems.length} eşleşen=${publisherMatched} yedek=${googleFallbacks} uyuşmazlık=${publisherMismatches}`);
 
-  // Eksik kapak görsellerini challenge-duyarlı görsel motoruyla tamamla (HEPSİ)
-  try {
-    await enrichImages(items, 5000, 8);
-  } catch (e) {
-    console.log(`  görsel zenginleştirme hatası: ${e.message}`);
-  }
-  const withImg = items.filter((i) => i.image).length;
-  const imageAudit = await auditImageUrls(items);
-  note(`görsel: kart=${withImg}/${items.length} · denetim: doğrulanan=${imageAudit.verified}/${imageAudit.direct}, HTTP-hata=${imageAudit.httpFailures}, görsel-değil=${imageAudit.nonImageResponses}, istek-hata=${imageAudit.requestFailures}`);
-  noteStage('görsel zenginleştirme ve denetim');
+  // PARALEL AŞAMA: görsel zenginleştirme+denetim ∥ TÜM tam metinler ∥ piyasa+hava
+  const marketWeatherPromise = Promise.all([
+    getMarketData().catch((e) => ({ items: [], live: false, error: e.message })),
+    getWeatherData().catch((e) => ({ live: false, error: e.message })),
+  ]);
 
-  // Derlemeyi kısa tutmak ve kaynakları yormamak için en yeni 300 haberin tam metnini üret.
-  // Daha eski haberler kartta kalır; okuyucu kaynak yayına gidebilir.
-  const fullTextItems = items.slice(0, FULL_TEXT_BUILD_LIMIT);
+  const imagesPromise = (async () => {
+    try {
+      await enrichImages(items, 5000, 16);
+    } catch (e) {
+      console.log(`  görsel zenginleştirme hatası: ${e.message}`);
+    }
+    const withImg = items.filter((i) => i.image).length;
+    const imageAudit = await auditImageUrls(items);
+    return { withImg, imageAudit };
+  })();
+
+  // main'in "hızlı yayın" düzeltmesi korunur: varsayılan en yeni 300 haberin tam metni.
+  // TELGRAF_FULL_TEXT_LIMIT=0 → tüm haberler (patch'in ham davranışı).
+  const FULL_TEXT_LIMIT = Number(process.env.TELGRAF_FULL_TEXT_LIMIT ?? 300);
+  const fullTextItems = FULL_TEXT_LIMIT > 0 ? items.slice(0, FULL_TEXT_LIMIT) : items;
   let fullOk = 0;
   const fullDocs = [];
   const hostStats = new Map(); // host -> { ok, fail, via: Map, reasons: Map }
@@ -188,7 +193,7 @@ async function main() {
     if (!ok && reason) s.reasons.set(reason, (s.reasons.get(reason) || 0) + 1);
     hostStats.set(host, s);
   };
-  await mapLimit(fullTextItems, 10, async (it) => {
+  await mapLimit(fullTextItems, 32, async (it) => {
     try {
       const article = await fetchArticle(it);
       if (article?.content) {
@@ -211,17 +216,13 @@ async function main() {
       return `${h}: ${s.ok}/${s.ok + s.fail}${via}${why}`;
     })
     .join(' · ');
-  note(`tam metin: ${fullOk}/${fullTextItems.length} denenen (en yeni ${fullTextItems.length}/${items.length}) · ${hostSummary}`);
-  noteStage('tam metinler');
+  note(`tam metin: ${fullOk}/${fullTextItems.length} denenen (limit=${FULL_TEXT_LIMIT > 0 ? FULL_TEXT_LIMIT : 'yok'}/${items.length}) · ${hostSummary}`);
 
-  // Piyasa + hava (sunucu tarafında çekim — tarayıcı CORS sorunu yok)
-  const [market, weather] = await Promise.all([
-    getMarketData().catch((e) => ({ items: [], live: false, error: e.message })),
-    getWeatherData().catch((e) => ({ live: false, error: e.message })),
-  ]);
+  const [{ withImg, imageAudit }, [market, weather]] = await Promise.all([imagesPromise, marketWeatherPromise]);
+  note(`görsel: kart=${withImg}/${items.length} · denetim: doğrulanan=${imageAudit.verified}/${imageAudit.direct}, HTTP-hata=${imageAudit.httpFailures}, görsel-değil=${imageAudit.nonImageResponses}, istek-hata=${imageAudit.requestFailures}`);
   const marketSamples = (market.items || []).filter((m) => m.sample).map((m) => m.key);
   console.log(`piyasa: ${market.items?.length || 0} kalem (live=${market.live}, örnek=${marketSamples.join(',') || 'yok'}) · hava (live=${weather.live})`);
-  noteStage('piyasa ve hava');
+  noteStage('görsel + tam metin + piyasa (paralel)');
 
   // Stealth tarayıcı teşhisi + kapanış notu + adım özeti (ayrıntılı rapor)
   let stealthLine = 'stealth: kapalı';

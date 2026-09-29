@@ -4,6 +4,7 @@ process.env.TELGRAF_STEALTH = '0';
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { setHttpClient, resetHttpClient } from '../server/http.js';
 import {
   isChallengeResponse,
   isExpectedPublisherUrl,
@@ -60,12 +61,16 @@ test('does not label an ordinary publisher image as a screenshot proxy', () => {
 
 test('stops image fallbacks after a publisher security challenge', async (t) => {
   let requests = 0;
-  t.mock.method(globalThis, 'fetch', async () => {
+  t.after(() => resetHttpClient());
+  setHttpClient(async (url) => {
     requests++;
-    return new Response('<html><h1>Performing security verification</h1></html>', {
+    return {
+      ok: true,
       status: 200,
+      body: '<html><h1>Performing security verification</h1></html>',
+      finalUrl: url,
       headers: { 'content-type': 'text/html' },
-    });
+    };
   });
   const image = await extractOgImage('https://apnews.com/challenge-test-article');
   assert.equal(image, '');
@@ -74,7 +79,8 @@ test('stops image fallbacks after a publisher security challenge', async (t) => 
 
 test('refuses to fetch an AP card link hosted by a different publisher', async (t) => {
   let requests = 0;
-  t.mock.method(globalThis, 'fetch', async () => {
+  t.after(() => resetHttpClient());
+  setHttpClient(async () => {
     requests++;
     throw new Error('unexpected network request');
   });
@@ -86,7 +92,8 @@ test('refuses to fetch an AP card link hosted by a different publisher', async (
 
 test('keeps an existing direct feed image without making requests', async (t) => {
   let requests = 0;
-  t.mock.method(globalThis, 'fetch', async () => {
+  t.after(() => resetHttpClient());
+  setHttpClient(async () => {
     requests++;
     throw new Error('unexpected network request');
   });

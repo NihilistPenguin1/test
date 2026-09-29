@@ -2,6 +2,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import crypto from 'node:crypto';
 import { FETCH_TIMEOUT_MS, USER_AGENT, SOURCE_BY_ID } from './config.js';
+import { fetchPage } from './http.js';
 
 const parser = new XMLParser({
   ignoreAttributes: false,
@@ -13,19 +14,15 @@ const parser = new XMLParser({
 });
 
 export async function fetchText(url, timeoutMs = FETCH_TIMEOUT_MS) {
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      signal: ac.signal,
-      headers: { 'User-Agent': USER_AGENT, Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*' },
-      redirect: 'follow',
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
-    return await res.text();
-  } finally {
-    clearTimeout(t);
-  }
+  const res = await fetchPage(url, {
+    timeoutMs,
+    headers: {
+      'User-Agent': USER_AGENT,
+      Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
+    },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return res.body;
 }
 
 const asArray = (v) => (v == null ? [] : Array.isArray(v) ? v : [v]);

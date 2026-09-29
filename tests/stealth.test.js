@@ -54,14 +54,14 @@ ${'<p>Bu bir deneme makale govdesidir ve okunabilir metin uretmek icin yeterince
 
 const challengeHtml = (kind) => {
   if (kind === 'auto') {
-    // Managed challenge taklidi: 1.5 sn sonra cookie kurup kendiliğinden geçer
+    // Managed challenge taklidi: 1 sn sonra cookie kurup kendiliğinden geçer
     return `<!doctype html><html><head><title>Just a moment...</title></head><body>
       <div id="challenge-running"><h1>Checking your browser</h1></div>
       <script>
         setTimeout(() => {
           document.cookie = 'cf_clear=1; path=/';
           location.reload();
-        }, 1500);
+        }, 1000);
       </script></body></html>`;
   }
   if (kind === 'click') {
@@ -139,7 +139,7 @@ test('passes a click-verification challenge', async () => {
 
 test('gives up on an unpassable challenge but keeps stats', async () => {
   await assert.rejects(
-    () => stealthFetchHtml(`${ctx.base}/hard`, { timeoutMs: 12000 }),
+    () => stealthFetchHtml(`${ctx.base}/hard`, { timeoutMs: 8000 }),
     /stealth failed/,
   );
   const s = stealthStats();

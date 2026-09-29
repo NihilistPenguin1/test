@@ -11,6 +11,7 @@
 import sanitizeHtml from 'sanitize-html';
 import { USER_AGENT, SOURCE_BY_ID } from './config.js';
 import { fetchText } from './rss.js';
+import { fetchPage, noteHostFailure, noteHostSuccess, isHostBlocked } from './http.js';
 import { stealthEnabled, stealthFetchHtml, stealthResolveGoogleNews, stealthStats } from './stealth.js';
 
 const JINA_PREFIX = 'https://r.jina.ai/';
@@ -22,64 +23,40 @@ const googleUrlCache = new Map(); // google news link -> gerçek makale URL
 const articleCache = new Map();   // id -> { at, data }
 const ARTICLE_TTL = 24 * 60 * 60 * 1000;
 
-// Host bazlı istek aralığı: aynı yayıncıya arka arkaya istekle 429 riskini azaltır.
-const hostLastHit = new Map();
-const HOST_MIN_GAP_MS = 250;
-
-async function paceHost(url) {
-  try {
-    const host = new URL(url).host;
-    const last = hostLastHit.get(host) || 0;
-    const wait = last + HOST_MIN_GAP_MS - Date.now();
-    if (wait > 0) await sleep(wait);
-    hostLastHit.set(host, Date.now());
-  } catch { /* geçersiz URL */ }
-}
-
-async function fetchHtml(url, timeoutMs = 9000, attempt = 0) {
-  await paceHost(url);
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      signal: ac.signal,
-      redirect: 'follow',
-      headers: {
-        'User-Agent': USER_AGENT,
-        Accept: 'text/html,application/xhtml+xml',
-        'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
-      },
-    });
-    if (!res.ok) {
-      const error = new Error(`HTTP ${res.status}`);
-      error.status = res.status;
-      if (res.status === 429 && attempt < 1) {
-        // Tekrar deneme: Retry-After yoksa kısa geri çekilme
-        const ra = Number(res.headers.get('retry-after') || 0);
-        await sleep(Math.min(8000, (ra > 0 ? ra * 1000 : 1500) + Math.floor(Math.random() * 700)));
-        return fetchHtml(url, timeoutMs, attempt + 1);
-      }
-      throw error;
+// Eşzamanlılık artık http.js içinde (host başına slot + fail-fast blok listesi);
+// aynı yayıncıya seri bindirmeyi oradaki sayaç yönetir.
+async function fetchHtml(url, timeoutMs = 7000, attempt = 0) {
+  const res = await fetchPage(url, {
+    timeoutMs,
+    headers: {
+      Accept: 'text/html,application/xhtml+xml',
+      'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+    },
+  });
+  if (!res.ok) {
+    const error = new Error(`HTTP ${res.status}`);
+    error.status = res.status;
+    if (res.status === 429 && attempt < 1) {
+      // Tekrar deneme: Retry-After yoksa kısa geri çekilme
+      const ra = Number(res.headers?.['retry-after'] || 0);
+      await sleep(Math.min(8000, (ra > 0 ? ra * 1000 : 1500) + Math.floor(Math.random() * 700)));
+      return fetchHtml(url, timeoutMs, attempt + 1);
     }
-    return { html: await res.text(), finalUrl: res.url || url };
-  } finally {
-    clearTimeout(t);
+    noteHostFailure(url);
+    throw error;
   }
+  noteHostSuccess(url);
+  return { html: res.body, finalUrl: res.finalUrl || url };
 }
 
 async function fetchJina(url, timeoutMs = 15000) {
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const res = await fetch(JINA_PREFIX + url, {
-      signal: ac.signal,
-      headers: { 'User-Agent': USER_AGENT, Accept: 'text/plain' },
-    });
-    if (!res.ok) throw new Error(`jina HTTP ${res.status}`);
-    return await res.text();
-  } finally {
-    clearTimeout(t);
-  }
+  const res = await fetchPage(JINA_PREFIX + url, {
+    timeoutMs,
+    accept: 'text',
+    headers: { Accept: 'text/plain' },
+  });
+  if (!res.ok) throw new Error(`jina HTTP ${res.status}`);
+  return res.body;
 }
 
 /* ============================================================
@@ -687,12 +664,31 @@ function parseJinaMeta(md) {
   return { title: title.trim() };
 }
 
+/** Sayfa gürültüsünü atar (script/style/svg/yorum) — parse'ı 2-3x hızlandırır */
+function stripNoise(html) {
+  return String(html || '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, '')
+    .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+}
+
 /** Readability + sanitizasyon — doğrudan ve stealth katmanları için ortak yol */
 async function readabilityFromHtml(html, finalUrl, item) {
-  const { JSDOM } = await import('jsdom');
   const { Readability } = await import('@mozilla/readability');
-  const dom = new JSDOM(html, { url: finalUrl });
-  const parsed = new Readability(dom.window.document).parse();
+  // Hız yol: linkedom (~6ms/sayfa); beklenmedik DOM durumunda jsdom'a düşer
+  let parsed = null;
+  try {
+    const { parseHTML } = await import('linkedom');
+    const { document } = parseHTML(stripNoise(html));
+    parsed = new Readability(document).parse();
+  } catch { /* jsdom yedeği */ }
+  if (!parsed) {
+    const { JSDOM } = await import('jsdom');
+    const dom = new JSDOM(stripNoise(html), { url: finalUrl });
+    parsed = new Readability(dom.window.document).parse();
+  }
   const text = (parsed?.textContent || '').replace(/\s+/g, ' ').trim();
   if (parsed?.content && text.length >= 400) {
     const contentHtml = sanitizeContent(parsed.content).replace(
@@ -759,7 +755,8 @@ export async function fetchArticle(item) {
     e.status && failures.push(`status: ${e.status}`);
 
     // 2) Stealth tarayıcı — challenge/403/429/kısa içerik/ağ hatasında agresif deneme
-    if (stealthEnabled()) {
+    // (http.js'teki host bloğu yalnızca tarayıcı açmanın boşuna olduğu durumda atlar)
+    if (stealthEnabled() && !isHostBlocked(realUrl)) {
       stealthAttempted = true;
       try {
         const page = await stealthFetchHtml(realUrl);

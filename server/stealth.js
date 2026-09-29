@@ -72,11 +72,11 @@ function getHostState(url) {
 }
 
 function withinBudget(scope = 'article') {
-  const total = Number(process.env.TELGRAF_STEALTH_BUDGET || 1380000);
+  const total = Number(process.env.TELGRAF_STEALTH_BUDGET || 480000);
   const limits = {
-    image: Number(process.env.TELGRAF_STEALTH_IMAGE_BUDGET || 240000),
-    resolve: Number(process.env.TELGRAF_STEALTH_RESOLVE_BUDGET || 240000),
-    article: Number(process.env.TELGRAF_STEALTH_ARTICLE_BUDGET || 900000),
+    image: Number(process.env.TELGRAF_STEALTH_IMAGE_BUDGET || 120000),
+    resolve: Number(process.env.TELGRAF_STEALTH_RESOLVE_BUDGET || 180000),
+    article: Number(process.env.TELGRAF_STEALTH_ARTICLE_BUDGET || 240000),
   };
   return budgetSpent < total && (scopeSpent.get(scope) || 0) < (limits[scope] ?? limits.article);
 }
@@ -155,13 +155,22 @@ async function resolvePuppeteer() {
 }
 
 async function getBrowser() {
-  if (browserPromise) return browserPromise;
+  if (browserPromise) {
+    const existing = await browserPromise.catch(() => null);
+    const alive = existing && (existing.connected ?? existing.isConnected?.() ?? true);
+    if (alive) return existing;
+    // Çökmüş tarayıcı: kapat, yeniden başlat
+    try { await existing?.close(); } catch { /* zaten kapalı */ }
+    browserPromise = null;
+  }
   browserPromise = (async () => {
     const { puppeteer, executablePath, extraArgs } = await resolvePuppeteer();
     const headful = ['1', 'true', 'yes'].includes(String(process.env.TELGRAF_HEADFUL || '').toLowerCase());
     const profileDir = process.env.TELGRAF_STEALTH_PROFILE
       || path.join(os.tmpdir(), 'telgraf-stealth-profile');
     fs.mkdirSync(profileDir, { recursive: true });
+    // sparticuz'un tek süreçlik bayrakları çoklu context'te kararsız; ayıkla
+    const stableArgs = extraArgs.filter((a) => !/^--(single-process|no-zygote)$/.test(a));
     const browser = await puppeteer.launch({
       executablePath,
       headless: !headful,
@@ -173,7 +182,7 @@ async function getBrowser() {
         '--disable-features=IsolateOrigins,site-per-process',
         '--lang=tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
         '--window-size=1366,900',
-        ...extraArgs,
+        ...stableArgs,
       ],
       defaultViewport: { width: 1366, height: 900 },
       ignoreHTTPSErrors: true,
@@ -262,9 +271,9 @@ async function humanMove(page) {
     const x = rnd(120, 900);
     const y = rnd(120, 600);
     await page.mouse.move(x / 2, y / 2);
-    await page.mouse.move(x, y, { steps: rnd(6, 14) });
+    await page.mouse.move(x, y, { steps: rnd(3, 6) });
     await page.evaluate(() => window.scrollBy(0, Math.round(80 + Math.random() * 220)));
-    await sleep(rnd(150, 450));
+    await sleep(rnd(30, 90));
   } catch { /* sayfa kapanmış olabilir */ }
 }
 
@@ -340,14 +349,13 @@ async function pressAndHold(page) {
 
 /**
  * Challenge sayfasındayken geçmeyi dener: bekleme → tıklamalar → basılı tutma.
- * 'cleared' | 'still' döner.
+ * 'cleared' | 'still' döner. Hızlı tur: en fazla ~4 sn.
  */
 async function attemptChallengePass(page, deadline) {
   stats.challengeSeen++;
   // a) Kendiliğinden geçişi bekle (managed challenge temiz tarayıcıda geçer)
-  for (let i = 0; i < 6; i++) {
-    await humanMove(page);
-    await sleep(1500);
+  for (let i = 0; i < 4; i++) {
+    await sleep(700);
     if (Date.now() > deadline) break;
     const body = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
     const title = await page.title().catch(() => '');
@@ -356,15 +364,16 @@ async function attemptChallengePass(page, deadline) {
       stats.challengeCleared++;
       return 'cleared';
     }
-    if (i === 1 || i === 3) await clickCheckboxish(page);
-    if (i === 2) await pressAndHold(page);
-    if (i === 4) {
+    if (i === 0) await clickCheckboxish(page);
+    if (i === 1) await pressAndHold(page);
+    if (i === 2) {
       await clickCheckboxish(page);
       await pressAndHold(page);
     }
+    await humanMove(page);
   }
   // b) Son kontroller
-  await sleep(1200);
+  await sleep(500);
   const body = await page.evaluate(() => document.body?.innerText || '').catch(() => '');
   const title = await page.title().catch(() => '');
   const markers = await challengeMarkers(page);
@@ -452,7 +461,7 @@ function releaseSlot() {
 }
 
 async function stealthFetchHtmlInner(url, host, state, opts) {
-  const perUrlBudget = Number(process.env.TELGRAF_STEALTH_TIMEOUT || 45000);
+  const perUrlBudget = Number(process.env.TELGRAF_STEALTH_TIMEOUT || 15000);
   const quick = state.hardBlocked;
   const scope = opts.scope || 'article';
   const started = Date.now();
@@ -493,7 +502,7 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
   }
 
   state.fail++;
-  if (state.fail >= 3 && !state.ok) state.hardBlocked = true;
+  if (state.fail >= 2 && !state.ok) state.hardBlocked = true;
   recordSpent(scope, Date.now() - started);
   throw new Error(`stealth failed (${host}): ${lastError}`);
 }
@@ -525,7 +534,7 @@ async function attemptOnce(url, { strategy, deadline, host, state, quick, waitUn
     if (!quick && strategy !== 'mobile-context') {
       try {
         const home = new URL(url).origin + '/';
-        await page.goto(home, { waitUntil: 'domcontentloaded', timeout: Math.min(15000, Math.max(3000, deadline - Date.now())) });
+        await page.goto(home, { waitUntil: 'domcontentloaded', timeout: Math.min(6000, Math.max(2000, deadline - Date.now())) });
         await humanMove(page);
         referer = home;
       } catch { /* ısınma iyi niyetli */ }
@@ -543,19 +552,23 @@ async function attemptOnce(url, { strategy, deadline, host, state, quick, waitUn
         }
         throw e;
       }
-      await sleep(350);
+      await sleep(250);
       await humanMove(page);
 
       let body = await page.evaluate(() => document.body?.innerHTML || '').catch(() => '');
       let title = await page.title().catch(() => '');
       let markers = await challengeMarkers(page);
+      const textLen = (body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().length;
 
-      if (markers.length || looksLikeChallenge(body, title)) {
+      // Kritik: yalnız İÇERİK İNCE ise challenge sayfası sayılır. Haber metni
+      // "verify you are human" gibi kalıpları içerebilir; o sayfalar çözülmüş sayılır.
+      if (textLen < 500 && (markers.length || looksLikeChallenge(body, title))) {
         if (quick) return null; // duvarlı hostta çözme denemesi yapma
         const outcome = await attemptChallengePass(page, deadline);
         if (outcome !== 'cleared') {
           body = await page.evaluate(() => document.body?.innerHTML || '').catch(() => '');
-          if (looksLikeChallenge(body, await page.title().catch(() => ''))) continue; // sonraki çeşitleme
+          const t2 = (body || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().length;
+          if (t2 < 500 && looksLikeChallenge(body, await page.title().catch(() => ''))) continue; // sonraki çeşitleme
         }
         body = await page.evaluate(() => document.body?.innerHTML || '').catch(() => '');
         title = await page.title().catch(() => '');
@@ -588,7 +601,7 @@ async function attemptOnce(url, { strategy, deadline, host, state, quick, waitUn
  */
 export async function stealthResolveGoogleNews(url, opts = {}) {
   if (!stealthEnabled()) return '';
-  const timeoutMs = opts.timeoutMs || 30000;
+  const timeoutMs = opts.timeoutMs || 12000;
   const started = Date.now();
   if (!withinBudget('resolve')) { stats.budgetSkips++; return ''; }
   try {
@@ -600,7 +613,7 @@ export async function stealthResolveGoogleNews(url, opts = {}) {
       await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
       // Otomatik yönlendirmeyi bekle (10 sn)
       const t0 = Date.now();
-      while (Date.now() - t0 < 10000) {
+      while (Date.now() - t0 < 5000) {
         const cur = page.url();
         try {
           if (!isG(cur)) return cur;

@@ -37,7 +37,7 @@ jobs:
           cache: npm
 
       - name: Bağımlılıklar
-        run: npm ci
+        run: npm ci --prefer-offline --no-audit --no-fund
 
       - name: Birim testleri
         run: npm test
@@ -46,6 +46,7 @@ jobs:
         env:
           TELGRAF_CHROME: /usr/bin/google-chrome
           TELGRAF_HEADFUL: "1"
+          TELGRAF_STEALTH_TIMEOUT: "12000"
         run: xvfb-run -a node scripts/build-static.mjs
 
       - name: Pages arşivi yükle
