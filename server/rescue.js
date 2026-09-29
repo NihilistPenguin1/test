@@ -49,6 +49,10 @@ const WORKERS = int(process.env.TELGRAF_RESCUE_WORKERS, 4);
 const MIN_TEXT = int(process.env.TELGRAF_RESCUE_MIN_TEXT, 700);
 /** Ayna kabul eşiği: hedef başlığın ilk N anlamlı kelimesinin ne kadarı sayfada var */
 const MIRROR_OVERLAP = Number.parseFloat(process.env.TELGRAF_RESCUE_OVERLAP ?? '0.5');
+/** Arama motorunun aday URL için verdiği başlığın örtüşme eşiği (2. kanıt) */
+const SEARCH_TITLE_OVERLAP = Number.parseFloat(process.env.TELGRAF_RESCUE_SEARCH_OVERLAP ?? '0.8');
+/** (b) yolunda sayfanın kendisinde aranan en az örtüşme */
+const MIN_PAGE_OVERLAP = Number.parseFloat(process.env.TELGRAF_RESCUE_MIN_PAGE_OVERLAP ?? '0.25');
 /** Yayıncının kendi kopyasında beklenen başlık örtüşmesi (wayback/jina) */
 const HEADLINE_OVERLAP = Number.parseFloat(process.env.TELGRAF_RESCUE_HEADLINE ?? '0.5');
 /** Ayna yalnız tel (wire) ajanslarının yeniden yayınında kullanılsın */
@@ -407,7 +411,15 @@ const MIRROR_DENY = /blogspot\.|medium\.com|tumblr\.com|wordpress\.com|quora\.co
 
 function searchLinks(html) {
   const out = [];
-  // Bing RSS: <item><link>https://…</link> — en temiz kaynak
+  // Bing RSS: <item><title>…</title><link>https://…</link> — başlık ayrıca
+  // taşınır: yeniden-yayında sayfanın kendi başlığı değiştirilmiş olabilir, ama
+  // arama motorunun o URL için verdiği başlık ayrı ve güçlü bir kanıttır.
+  const titles = new Map();
+  for (const it of String(html).matchAll(/<item>[\s\S]*?<\/item>/g)) {
+    const t = (it[0].match(/<title>\s*([\s\S]*?)\s*<\/title>/i) || [])[1] || '';
+    const l = (it[0].match(/<link>\s*(https?:\/\/[^\s<]+)\s*<\/link>/i) || [])[1];
+    if (l && t) titles.set(l, t.replace(/<!\[CDATA\[|\]\]>/g, '').trim());
+  }
   for (const m of String(html).matchAll(/<link>\s*(https?:\/\/[^\s<]+)\s*<\/link>/g)) out.push(m[1]);
   for (const m of String(html).matchAll(/[?&](?:uddg|u)=([^"'&][^"']*)/g)) {
     try {
@@ -417,7 +429,8 @@ function searchLinks(html) {
   }
   for (const m of String(html).matchAll(/href="(https?:\/\/[^"]+)"/g)) out.push(m[1]);
   const ENGINE = /duckduckgo|bing\.com|google\.|yandex|brave\.|ddg|archive\.org|webcache|microsoft\.com/i;
-  return [...new Set(out)].filter((u) => /^https?:\/\//.test(u) && !ENGINE.test(hostOf(u)));
+  const urls = [...new Set(out)].filter((u) => /^https?:\/\//.test(u) && !ENGINE.test(hostOf(u)));
+  return { urls, titles };
 }
 
 async function viaMirror(realUrl, item, host) {
@@ -428,12 +441,14 @@ async function viaMirror(realUrl, item, host) {
   state.searches += 1;
   await nap(400); // arama motorunu zorlama
   let cands0 = [];
+  let searchTitles = new Map();
   let transport = 0;
   for (const base of SEARCHES) {
     const s = await fetchPage(`${base}${encodeURIComponent(`"${title.slice(0, 90)}"`)}`, { timeoutMs: 15000, hostLane: 'page' });
     if (!s.ok) { transport += 1; continue; }
-    cands0 = searchLinks(s.body);
-    if (cands0.length) break;
+    const parsed = searchLinks(s.body);
+    cands0 = parsed.urls;
+    if (parsed.urls.length) { searchTitles = parsed.titles; break; }
   }
   if (!cands0.length) {
     // Motorların hepsi patladıysa yol ölü; boş döndüyse haberde ayna yok
@@ -464,16 +479,25 @@ async function viaMirror(realUrl, item, host) {
     try {
       art = await readabilityFromHtml(b.body, c, item);
     } catch { bad += 1; reject('mirror', 'çıkarılamadı'); continue; }
-    if (!acceptable(art, item, MIRROR_OVERLAP)) {
+    // İki kanıt yolu: (a) sayfanın kendi metni başlıkla örtüşür, ya da
+    // (b) arama motorunun bu URL için verdiği başlık güçlü şekilde örtüşür ve
+    // sayfa da tamamen alakasız değildir. (b) yeniden-yayınlarda gerekli:
+    // "FHFA: home prices rise" başlıklı kopya, "(Reuters)" teliyle aynı haberdir.
+    const o = acceptable(art, item, MIRROR_OVERLAP);
+    const sTitle = searchTitles.get(c) || '';
+    const oSearch = sTitle ? titleOverlap(title, sTitle) : 0;
+    if (!o && !(oSearch >= SEARCH_TITLE_OVERLAP && acceptable(art, item, MIN_PAGE_OVERLAP))) {
       bad += 1;
-      reject('mirror', NEGATIVE_RE.test(String(art.title || '')) ? 'hata sayfası' : 'başlık örtüşmedi');
+      reject('mirror', NEGATIVE_RE.test(String(art.title || '')) ? 'hata sayfası'
+        : oSearch >= SEARCH_TITLE_OVERLAP ? 'sayfa zayıf' : 'başlık örtüşmedi');
       continue;
     }
     const words = plainWords(art.content);
     // TEL KAYNAĞI DOĞRULAMASI: ayna, teli kendi adıyla yayımlamış olmalı
     if (WIRE_ONLY && !WIRE_RE.test(`${art.title || ''} ${words.slice(0, 1600)}`)) { bad += 1; reject('mirror', 'tel etiketi yok'); continue; }
     art.mirrorUrl = c;
-    art.mirrorOverlap = art.headlineOverlap;
+    art.mirrorOverlap = Math.max(art.headlineOverlap || 0, Number(oSearch.toFixed(2)));
+    art.mirrorEvidence = o ? 'page' : 'search-title';
     art.via = `mirror:${hostOf(c)}`;
     art.title = item.title || art.title; // kart başlığı korunur (ayna başlığı değişebilir)
     return art;

@@ -217,3 +217,51 @@ test('kurtarma yalnız ölçülmüş duvarlı yayıncılara uygulanır', () => {
   assert.ok(rescue.titleOverlap('Zelenskyy presses allies for missile defence', 'zelenskyy presses allies for missile defence deal') > 0.8);
   assert.equal(rescue.titleOverlap('Zelenskyy presses allies for missile defence', 'highway bill nobody expected'), 0);
 });
+test('ayna: sayfa başlığı değiştirilmişse arama motorunun başlığı ikinci kanıttır', async () => {
+  resetHostState();
+  rescue.resetRescueState();
+  const title = 'US single-family home prices rise in July, FHFA says';
+  const rss = (itemTitle, link) => `<?xml version="1.0"?><rss><channel><item><title>${itemTitle}</title><link>${link}</link></item></channel></rss>`;
+  fake([
+    [/web\/(.+?)id_/, () => ({ ok: false, status: 404, body: '', headers: {} })],
+    [/[?&]q=/, () => ({
+      ok: true, status: 200,
+      body: rss(title, 'https://www.usnews.com/n/home-prices-july'),
+      headers: {},
+    })],
+    // Yeniden-yayın başlığı değiştirilmiş: sayfa örtüşmesi tek başına yetmez (0.375)
+    [/usnews\.com\/n\/home-prices-july/, () => ({
+      ok: true, status: 200, headers: {},
+      body: articleHtml('Home prices rose again in July, new data show', '(Reuters)'),
+    })],
+    [/r\.jina\.ai/, () => ({ ok: false, status: 403, body: '', headers: {} })],
+  ]);
+  const art = await rescue.rescueArticle(item('https://www.reuters.com/business/home-prices-2026-09-29/', title, 'reuters'));
+  assert.equal(art.rescuedBy, 'mirror');
+  assert.equal(art.mirrorEvidence, 'search-title', 'kabul gerekçesi raporlanmalı');
+  assert.ok(art.textLength > 700);
+  resetHttpClient();
+});
+
+test('ayna: arama başlığı örtüşüp sayfa alakasızsa yine red', async () => {
+  resetHostState();
+  rescue.resetRescueState();
+  const title = 'US single-family home prices rise in July, FHFA says';
+  const rss = (itemTitle, link) => `<?xml version="1.0"?><rss><channel><item><title>${itemTitle}</title><link>${link}</link></item></channel></rss>`;
+  fake([
+    [/web\/(.+?)id_/, () => ({ ok: false, status: 404, body: '', headers: {} })],
+    [/[?&]q=/, () => ({ ok: true, status: 200, body: rss(title, 'https://www.usnews.com/n/wrong'), headers: {} })],
+    [/usnews\.com\/n\/wrong/, () => ({
+      ok: true, status: 200, headers: {},
+      // tel etiketi var ama içerik bambaşka haber: taban örtüşme altında kalır
+      body: articleHtml('Senators argue over a highway bill that nobody expected', '(Reuters)'),
+    })],
+    [/r\.jina\.ai/, () => ({ ok: false, status: 403, body: '', headers: {} })],
+  ]);
+  await assert.rejects(
+    () => rescue.rescueArticle(item('https://www.reuters.com/business/home-prices-2026-09-29/', title, 'reuters')),
+    /ayna tutmadı/,
+  );
+  assert.match(JSON.stringify(rescue.rescueStats().rejects), /sayfa zayıf/);
+  resetHttpClient();
+});
