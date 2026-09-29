@@ -63,7 +63,7 @@ export function stealthStats() {
     maxPages: MAX_PAGES,
     queueDrops: stats.queueDrops,
     wallMs: WALL_CLOCK_MS,
-    elapsedMs: Date.now() - moduleStartedAt,
+    elapsedMs: elapsedMs(),
     windows: Object.fromEntries(Object.entries(scopeWindow).map(([k, v]) => {
       const st = scopeStartedAt.get(k);
       return [k, st ? `${Math.round((Date.now() - st) / 1000)}/${Math.round(v / 1000)}sn` : '-'];
@@ -89,8 +89,12 @@ const QUICK_COOLDOWN_MS = Number(process.env.TELGRAF_STEALTH_QUICK_COOLDOWN || 2
 const QUICK_COOLDOWN_MAX_MS = Number(process.env.TELGRAF_STEALTH_QUICK_COOLDOWN_MAX || 2700000);
 // Duvar saati kesimi: derleme ne kadar sürerse sürsün tarayıcı işi sonsuza
 // uzamasın (Actions işi 30 dk;Pages yayını bunu beklememeli).
-const WALL_CLOCK_MS = Number(process.env.TELGRAF_STEALTH_WALL_MS || process.env.TELGRAF_STEALTH_BUDGET || 420000);
-const moduleStartedAt = Date.now();
+const WALL_CLOCK_MS = Number(process.env.TELGRAF_STEALTH_WALL_MS || process.env.TELGRAF_STEALTH_BUDGET || 600000);
+// İlk kullanımdan itibaren ölçülür: aksi halde görsel turu tek başına tarayıcı
+// bütçesini tüketip makale turunu kesik bırakabiliyordu.
+let moduleStartedAt = 0;
+const markUsed = () => { if (!moduleStartedAt) moduleStartedAt = Date.now(); };
+const elapsedMs = () => (moduleStartedAt ? Date.now() - moduleStartedAt : 0);
 
 function getHostState(url) {
   const host = new URL(url).hostname.toLowerCase().replace(/^www\./, '');
@@ -130,13 +134,27 @@ async function acquireSlotFrom(c, limit, waitMs) {
   }
 }
 
+/**
+ * Çağıran taraf (build) kuyruğu boşuna meşgul etmesin: hosttan vazgeçildiyse
+ * ya da kesim geçildiyse buradan önce sor — yoksa her haber sıraya girer ve
+ * gerçekten şansı olan yayıncılar kuyrukta düşer.
+ * @returns {string} '' denenebilir, Aksi halde neden atlandığı
+ */
+export function stealthShouldSkip(url) {
+  if (!stealthEnabled()) return 'stealth disabled';
+  if (elapsedMs() > WALL_CLOCK_MS) return 'wall-clock cutoff';
+  const s = getHostState(url).state;
+  if (s.hardBlocked && s.quickUntil > Date.now()) return 'host given up';
+  return '';
+}
+
 /** Derleyicinin kuyruk boyutunu buna göre ayarlaması için. */
 export function stealthCapacity() {
   return {
     pages: MAX_PAGES,
     hostPages: HOST_PAGES,
     urlBudgetMs: Number(process.env.TELGRAF_STEALTH_TIMEOUT || 45000),
-    remainingMs: Math.max(0, WALL_CLOCK_MS - (Date.now() - moduleStartedAt)),
+    remainingMs: Math.max(0, WALL_CLOCK_MS - elapsedMs()),
   };
 }
 
@@ -167,7 +185,7 @@ const scopeWindow = {
 const scopeStartedAt = new Map(); // kapsam -> ilk kullanım anı
 
 function withinBudget(scope = 'article') {
-  if (Date.now() - moduleStartedAt > WALL_CLOCK_MS) return false;
+  if (elapsedMs() > WALL_CLOCK_MS) return false;
   const start = scopeStartedAt.get(scope);
   if (start === undefined) return true;
   return Date.now() - start < (scopeWindow[scope] ?? scopeWindow.article);
@@ -628,9 +646,11 @@ async function stealthFetchHtmlInner(url, host, state, opts) {
   // kesim yaklaştıysa yeni tarayıcı işi açma (host başarısız sayılmaz)
   if (!withinBudget(scope)) {
     stats.budgetSkips++;
-    throw new Error(Date.now() - moduleStartedAt > WALL_CLOCK_MS ? 'stealth wall-clock cutoff' : 'stealth budget exhausted');
+    throw new Error(elapsedMs() > WALL_CLOCK_MS ? 'stealth wall-clock cutoff' : 'stealth budget exhausted');
   }
+  markUsed();
   markScope(scope);
+  markUsed();
   const started = Date.now();
   const deadline = started + Math.min(opts.timeoutMs || perUrlBudget, quick ? 12000 : perUrlBudget);
   // Duvarlı hostta her makalede uzun deneme yapma: tek hızlı deneme
@@ -813,6 +833,7 @@ async function attemptOnce(url, { strategy, deadline, host, state, quick, waitUn
  */
 export async function stealthResolveGoogleNews(url, opts = {}) {
   if (!stealthEnabled()) return '';
+  markUsed();
   const timeoutMs = opts.timeoutMs || 12000;
   const started = Date.now();
   if (!withinBudget('resolve')) { stats.budgetSkips++; return ''; }

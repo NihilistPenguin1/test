@@ -200,9 +200,20 @@ async function main() {
   // işleriyle meşgul olmaz, HTTP de tarayıcıyı bekler; birbirlerini
   // yavaşlatmazlar. Kaynak uyuşmazlığı olanlar tarayıcıya gitmez (politika).
   let stealthOn = false;
+  let stealthMod = null;
   try {
-    stealthOn = (await import('../server/stealth.js')).stealthEnabled();
+    stealthMod = await import('../server/stealth.js');
+    stealthOn = stealthMod.stealthEnabled();
   } catch { stealthOn = false; }
+  // Hosttan vazgeçildiyse haber kuyruğa hiç girmez: sırayı gerçekten şansı
+  // olan yayıncılara bırakır (Reuters'ta 70 haber kuyruğu şişiriyordu).
+  const browserWorthIt = (it) => {
+    if (!stealthOn || !stealthMod?.stealthShouldSkip) return false;
+    try {
+      const u = new URL(it.link);
+      return !stealthMod.stealthShouldSkip(u.href);
+    } catch { return true; }
+  };
   const deferred = [];
   const runFullText = async (it, phases) => {
     try {
@@ -213,12 +224,12 @@ async function main() {
         bump(it, true, article.via || '?');
         return;
       }
-      if (phases.browser === false && stealthOn) { deferred.push(it); return; }
+      if (phases.browser === false && browserWorthIt(it)) { deferred.push(it); return; }
       bump(it, false, '', 'empty');
     } catch (e) {
       const msg = String(e.message || '');
       const fatal = e.reason === 'source-mismatch' || /does not match the card source/.test(msg);
-      if (!fatal && phases.browser === false && stealthOn) { deferred.push(it); return; }
+      if (!fatal && phases.browser === false && browserWorthIt(it)) { deferred.push(it); return; }
       bump(it, false, '', fatal ? 'source-mismatch' : (e.reason || 'other'));
       console.log(`  tam metin yok (${it.id}): ${msg.slice(0, 80)}`);
     }

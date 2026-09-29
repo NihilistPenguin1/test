@@ -59,7 +59,7 @@ Hepsi opsiyoneldir; varsayılanlar GitHub Actions koşucusuna (4 vCPU) göre aya
 | `TELGRAF_STEALTH_CHALLENGE_WAIT` | 12000 (ms) | Captcha geçmesi için bekleme turu süresi |
 | `TELGRAF_STEALTH_CONCURRENCY` | min(6, vCPU) | Açık tarayıcı sayfası |
 | `TELGRAF_STEALTH_HOST_CONCURRENCY` | min(4, vCPU) | Host başına paralel sayfa (ısınmış oturum paylaşılır) |
-| `TELGRAF_STEALTH_WALL_MS` | 420000 (7 dk) | Duvar saati kesimi: derlemeyi bekletmemek için tarayıcı işini kapatır |
+| `TELGRAF_STEALTH_WALL_MS` | 600000 (10 dk) | Duvar saati kesimi: derlemeyi bekletmemek için tarayıcı işini kapatır |
 | `TELGRAF_STEALTH_QUICK_COOLDOWN[_MAX]` | 240000 / 2700000 (ms) | Duvarlı hostta tam denemeye dönüşün seyrekleşme aralığı |
 
 ## Çalıştırma

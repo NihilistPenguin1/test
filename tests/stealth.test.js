@@ -38,6 +38,14 @@ test('detects challenge pages from body text and title', () => {
   assert.equal(looksLikeChallenge('<p>Ordinary news about security verification in politics.</p>'), false);
 });
 
+test('stealthShouldSkip is a cheap gate for the build queue', async () => {
+  const { stealthShouldSkip } = await import('../server/stealth.js');
+  assert.equal(stealthShouldSkip('https://never-tried.example/story'), '', 'yeni host denenmeli');
+  process.env.TELGRAF_STEALTH = '0';
+  assert.equal(stealthShouldSkip('https://never-tried.example/story'), 'stealth disabled');
+  process.env.TELGRAF_STEALTH = '1';
+});
+
 test('urlVariants offers bounded fallbacks including AMP', () => {
   const v = urlVariants('https://www.reuters.com/world/story-123');
   assert.ok(v.includes('https://www.reuters.com/world/story-123'));
