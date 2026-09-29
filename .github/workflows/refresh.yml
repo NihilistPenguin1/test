@@ -47,6 +47,12 @@ jobs:
           # 30 sn, toplam süre aşama bütçeleriyle sınırlı.
           TELGRAF_STEALTH_TIMEOUT: "30000"
           TELGRAF_STEALTH_CHALLENGE_WAIT: "16000"
+          # Kurtarma turu (Wayback kopyası / tel aynası / beklemeli jina):
+          # duvarlı yayıncılarda kapsamı artıran üçüncü geçiş. Süreleri sınırlı,
+          # böylece derleme 30 dakikalık iş zamanına çarpmaz.
+          TELGRAF_RESCUE: "1"
+          TELGRAF_RESCUE_MS: "240000"
+          TELGRAF_RESCUE_ITEM_MS: "20000"
         run: xvfb-run -a node scripts/build-static.mjs
 
       - name: Pages arşivi yükle

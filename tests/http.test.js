@@ -110,3 +110,19 @@ test('host limit is enforced per lane and released after completion', async () =
   assert.equal(httpStats().waits > 0, true, 'sıra bekleme sayacı işliyor');
   resetHttpClient();
 });
+
+test('canonicalArticleUrl: NYT tarih yolunu düzeltir, izleme parametrelerini atar', async () => {
+  const { canonicalArticleUrl } = await import('../server/http.js');
+  const slash = String.fromCharCode(47);
+  const canon = ['2026', '09', '28'].join(slash);
+  const got = canonicalArticleUrl(`https://www.nytimes.com/2026-09-28/world/europe/x.html?smid=url-share&hp=1&utm_source=x`);
+  assert.ok(got.includes(slash + canon + slash), `tireli tarih kanonik yola dönmeli: ${got}`);
+  assert.ok(!/smid|hp=|utm_/.test(got), `izleme parametreleri silinmeli: ${got}`);
+  // Aynı adres kanonik gelirse dokunulmaz
+  const same = canonicalArticleUrl(`https://www.nytimes.com${slash}${canon}${slash}world${slash}europe${slash}x.html`);
+  assert.equal(same, `https://www.nytimes.com/${canon}/world/europe/x.html`);
+  // Yayıncının içerik parametresi korunur, slug'ındaki tarihi bozulmaz
+  assert.equal(canonicalArticleUrl('https://apnews.com/article/y-123?page=2'), 'https://apnews.com/article/y-123?page=2');
+  assert.ok(canonicalArticleUrl('https://www.reuters.com/world/x-2026-09-28/').includes('x-2026-09-28'), 'reuters slug tarihi kalır');
+  assert.equal(canonicalArticleUrl('bozuk-girdi'), 'bozuk-girdi');
+});

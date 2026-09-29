@@ -60,6 +60,9 @@ Hepsi opsiyoneldir; varsayılanlar GitHub Actions koşucusuna (4 vCPU) göre aya
 | `TELGRAF_STEALTH_CONCURRENCY` | min(6, vCPU) | Açık tarayıcı sayfası |
 | `TELGRAF_STEALTH_HOST_CONCURRENCY` | min(4, vCPU) | Host başına paralel sayfa (ısınmış oturum paylaşılır) |
 | `TELGRAF_STEALTH_WALL_MS` | 600000 (10 dk) | Duvar saati kesimi: derlemeyi bekletmemek için tarayıcı işini kapatır |
+| `TELGRAF_RESCUE` / `_MS` / `_ITEM_MS` | `1` / `240000` / `30000` | Üçüncü geçiş (kurtarma): duvarlı yayıncının haberini Wayback kopyası, tel aynası (aynı haberin yeniden-yayını) ve beklemeli jina ile almaya çalışır. `_MS` turun tümünü, `_ITEM_MS` tek haberi sınırlar; `TELGRAF_RESCUE=0` ile kapanır. |
+| `TELGRAF_RESCUE_OVERLAP` / `_HEADLINE` | `0.5` / `0.5` | Kabul eşiği: bulunan sayfanın başlığı haberin başlığıyla ne kadar örtüşmeli. Düşürmek yanlış haberi metin yapma riskini artırır. |
+| `TELGRAF_RESCUE_WIRE_ONLY` | `1` | Ayna yolu yalnız tel ajansı etiketi taşıyan yeniden-yayınları kabul eder (`(Reuters)`, `(AP)`). |
 | `TELGRAF_STEALTH_QUICK_COOLDOWN[_MAX]` | 240000 / 2700000 (ms) | Duvarlı hostta tam denemeye dönüşün seyrekleşme aralığı |
 
 ## Çalıştırma

@@ -214,6 +214,19 @@ async function main() {
     } catch { return true; }
   };
   const deferred = [];
+  // ÜÇÜNCÜ GEÇİŞ (kurtarma): HTTP + tarayıcıyla alınamayan duvarlı yayıncılar
+  // için alternatif hatlar (Wayback kopyası / tel aynası / beklemeli jina).
+  let rescue = null;
+  try {
+    rescue = await import('../server/rescue.js');
+    if (rescue.resetRescueState) rescue.resetRescueState();
+  } catch { rescue = null; }
+  const rescueOn = !!rescue?.rescueEnabled?.();
+  const rescueQueue = [];
+  const maybeRescue = (it) => {
+    if (!rescueOn || !it) return;
+    try { if (rescue.rescuable(it)) rescueQueue.push(it); } catch { /* eleme */ }
+  };
   const runFullText = async (it, phases) => {
     try {
       const article = await fetchArticle(it, phases);
@@ -225,12 +238,15 @@ async function main() {
       }
       if (phases.browser === false && browserWorthIt(it)) { deferred.push(it); return; }
       bump(it, false, '', browserWorthIt(it) ? 'empty' : 'host-unwinnable');
+      if (phases.browser !== false) maybeRescue(it);
     } catch (e) {
       const msg = String(e.message || '');
       const fatal = e.reason === 'source-mismatch' || /does not match the card source/.test(msg);
       if (!fatal && phases.browser === false && browserWorthIt(it)) { deferred.push(it); return; }
       const gaveUp = !fatal && stealthOn && !browserWorthIt(it);
       bump(it, false, '', fatal ? 'source-mismatch' : (gaveUp ? 'host-unwinnable' : (e.reason || 'other')));
+      if (!fatal && phases.browser !== false) maybeRescue(it);
+      else if (!fatal && phases.browser === false && !browserWorthIt(it)) maybeRescue(it);
       console.log(`  tam metin yok (${it.id}): ${msg.slice(0, 80)}`);
     }
   };
@@ -258,6 +274,28 @@ async function main() {
     while (groups.some((g) => g.length)) for (const g of groups) if (g.length) spread.push(g.shift());
     await mapLimit(spread, browserWorkers, (it) => runFullText(it, { http: false, stealthTimeoutMs: cap.urlBudgetMs }));
   }
+  if (rescueQueue.length && rescueOn) {
+    const uniq = [...new Map(rescueQueue.map((it) => [it.id, it])).values()];
+    const cap2 = rescue.rescueCapacity ? rescue.rescueCapacity() : { workers: 4, maxItems: 0 };
+    const targets = cap2.maxItems ? uniq.slice(0, cap2.maxItems) : uniq;
+    note(`kurtarma: ${targets.length} duvarlı haber alternatif yollarla deneniyor (wayback/ayna/jina)`);
+    const done = new Set(fullDocs.map((d) => d.id));
+    await mapLimit(targets, Math.max(2, cap2.workers || 4), async (it) => {
+      if (done.has(it.id)) return;
+      try {
+        const article = await rescue.rescueArticle(it);
+        if (article?.content && !done.has(it.id)) {
+          fullDocs.push({ id: it.id, item: it, article });
+          done.add(it.id);
+          fullOk += 1;
+          bump(it, true, article.via || 'rescue');
+        }
+      } catch (e) {
+        bump(it, false, '', e.reason === 'rescue-window' ? 'rescue-window' : 'rescue-empty');
+      }
+    });
+    try { note(rescue.rescueLine()); } catch { /* rapor yardımıcı */ }
+  }
   const hostSummary = [...hostStats.entries()]
     .sort((a, b) => (b[1].fail - a[1].fail) || (b[1].ok + b[1].fail) - (a[1].ok + a[1].fail))
     .map(([h, s]) => {
@@ -266,6 +304,8 @@ async function main() {
       return `${h}: ${s.ok}/${s.ok + s.fail}${via}${why}`;
     })
     .join(' · ');
+  let rescueNote = 'kapalı';
+  try { if (rescueOn) rescueNote = rescue.rescueLine(); } catch { /* rapor yardımcısı */ }
   note(`tam metin: ${fullOk}/${fullTextItems.length} denenen (limit=${FULL_TEXT_LIMIT > 0 ? FULL_TEXT_LIMIT : 'yok'}/${items.length}) · ${hostSummary}`);
 
   const [{ withImg, imageAudit }, [market, weather]] = await Promise.all([imagesPromise, marketWeatherPromise]);
@@ -299,6 +339,7 @@ async function main() {
     `| Google News | batch=${gnBatch}, stealth=${gnStealth}/${gnStill} |`,
     `| Kapak görseli | ${withImg}/${items.length} |`,
     `| Tam metin | ${fullOk}/${fullTextItems.length} |`,
+    `| Kurtarma | ${rescueNote} |`,
     `| Piyasa / Hava | live=${market.live} / live=${weather.live} |`,
     `| Süre | ${Math.round((Date.now() - t0) / 1000)} sn |`,
     '',
@@ -338,6 +379,7 @@ async function main() {
     withImage: withImg,
     imageAudit,
     fullTextRequested: fullTextItems.length,
+    rescue: (() => { try { return rescueOn ? rescue.rescueStats() : { enabled: false }; } catch { return null; } })(),
     fullTexts: fullOk,
     marketLive: !!market.live,
     weatherLive: !!weather.live,

@@ -500,7 +500,11 @@
             data-link="${esc(item.link)}" data-fb="${esc(placeholderSVG(item.title, item.source))}"
             onerror="window.__imgFail(this)" />`;
           $('#modalReadTime').textContent = `· ~${a.readingMinutes} dk okuma`;
-          $('#modalAuthor').textContent = `Kaynak: ${meta.name || item.source}${a.author ? ' · ' + a.author : ''}`;
+          // Metin yayıncının kendi sayfasından gelmediyse bunu okura söyle:
+          // arşiv kopyası ve tel aynası aynı haberdir ama adres başkadır.
+          const viaNote = a.via === 'wayback' ? ' · arşiv kopyasından'
+            : String(a.via || '').startsWith('mirror:') ? ` · aynı tel metni: ${String(a.via).slice(7)}` : '';
+          $('#modalAuthor').textContent = `Kaynak: ${meta.name || item.source}${a.author ? ' · ' + a.author : ''}${viaNote}`;
           if (a.resolvedUrl && !a.resolvedUrl.includes('news.google.com')) $('#modalLink').href = a.resolvedUrl;
         } else {
           $('#modalSummary').hidden = false;

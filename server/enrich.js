@@ -11,7 +11,7 @@
 import sanitizeHtml from 'sanitize-html';
 import { USER_AGENT, SOURCE_BY_ID } from './config.js';
 import { fetchText } from './rss.js';
-import { fetchPage, isDirectFutile, wallReason, noteWall, noteSkip } from './http.js';
+import { fetchPage, isDirectFutile, wallReason, noteWall, noteSkip, canonicalArticleUrl } from './http.js';
 import { stealthEnabled, stealthFetchHtml, stealthResolveGoogleNews, stealthStats } from './stealth.js';
 
 const JINA_PREFIX = 'https://r.jina.ai/';
@@ -723,7 +723,7 @@ function stripNoise(html) {
 }
 
 /** Readability + sanitizasyon — doğrudan ve stealth katmanları için ortak yol */
-async function readabilityFromHtml(html, finalUrl, item) {
+export async function readabilityFromHtml(html, finalUrl, item) {
   const { Readability } = await import('@mozilla/readability');
   // Hız yol: linkedom (~6ms/sayfa); beklenmedik DOM durumunda jsdom'a düşer
   let parsed = null;
@@ -780,7 +780,11 @@ export async function fetchArticle(item, phases = {}) {
 
   // Google News çözümünü yalnız yayıncı alan adıyla eşleşiyorsa kullan.
   const resolvedUrl = await resolveArticleUrl(item.link);
-  const realUrl = isExpectedPublisherUrl(item.source, resolvedUrl) ? resolvedUrl : item.link;
+  // Kanonik adres: NYT'nin tarih-yol biçimi ve izleme parametreleri yüzünden
+  // "duvar" sanılan ölü linkler olmasın (ölçüldü: tireli biçim 404 veriyor).
+  const realUrl = canonicalArticleUrl(
+    isExpectedPublisherUrl(item.source, resolvedUrl) ? resolvedUrl : item.link,
+  );
 
   const failures = [];
   let stealthAttempted = false;
@@ -841,23 +845,7 @@ export async function fetchArticle(item, phases = {}) {
     try {
       if (!wantHttp) { const skip = new Error('jina'); skip.noNote = true; throw skip; }
       const md = await fetchJina(realUrl, 18000);
-      if (isChallengeResponse(md)) throw new Error('text fallback returned a security challenge');
-      const meta = parseJinaMeta(md);
-      const contentHtml = sanitizeContent(mdToHtml(md));
-      const text = md.replace(/[#*_>`\[\]()!]/g, ' ').replace(/\s+/g, ' ').trim();
-      if (text.length < 300) throw new Error('jina content too short');
-      const words = text.split(' ').length;
-      const data = {
-        title: meta.title || item.title,
-        author: item.author || '',
-        excerpt: item.summary || '',
-        image: item.image || (firstMarkdownImage(md) || ''),
-        content: contentHtml,
-        textLength: text.length,
-        readingMinutes: Math.max(1, Math.round(words / 220)),
-        resolvedUrl: realUrl !== item.link ? realUrl : item.link,
-        via: 'jina',
-      };
+      const data = articleFromJinaMarkdown(md, item, realUrl);
       articleCache.set(item.id, { at: Date.now(), data });
       return data;
     } catch (e2) {
@@ -872,6 +860,32 @@ export async function fetchArticle(item, phases = {}) {
     throw error;
   }
 }
+
+/**
+ * jina'nın markdown çıktısından makale kaydı üretir. Düz HTTP geçişinin son
+ * çaresi ile kurtarma katmanının `jina` yolu aynı kodu kullanır; beklemeli
+ * (X-Wait-For-Selector) ikinci deneme de aynı kalitede içerik üretsin.
+ */
+export function articleFromJinaMarkdown(md, item, realUrl) {
+  if (isChallengeResponse(md)) throw new Error('text fallback returned a security challenge');
+  const meta = parseJinaMeta(md);
+  const contentHtml = sanitizeContent(mdToHtml(md));
+  const text = String(md || '').replace(/[#*_>`\[\]()!]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (text.length < 300) throw new Error('jina content too short');
+  const words = text.split(' ').length;
+  return {
+    title: meta.title || item.title,
+    author: item.author || '',
+    excerpt: item.summary || '',
+    image: item.image || (firstMarkdownImage(md) || ''),
+    content: contentHtml,
+    textLength: text.length,
+    readingMinutes: Math.max(1, Math.round(words / 220)),
+    resolvedUrl: realUrl !== item.link ? realUrl : item.link,
+    via: 'jina',
+  };
+}
+
 
 /** Hata listesinden öncelikli neden kodu üretir (derleme teşhisi için) */
 export function classifyFailures(failures, firstError = {}, stealthAttempted = false) {

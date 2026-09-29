@@ -24,6 +24,7 @@
 //   TELGRAF_STEALTH_WALL_MS     tarayıcı işinin duvar saati kesimi (varsayılan 420000)
 //   TELGRAF_STEALTH_*_BUDGET    kapsam penceresi: o iş türünün ilk kullanımdan
 //                               itibaren kaç sn tarayıcıya izin verildiği (duvar saati)
+import { canonicalArticleUrl } from './http.js';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -582,7 +583,10 @@ async function attemptChallengePass(page, deadline) {
    ============================================================ */
 
 export function urlVariants(url) {
-  const out = [url];
+  // Kanonik adres önce gelir: NYT'nin tireli tarih-yolu 404 üretiyor, düzeltilmişi
+  // aynı haberin gerçek adresi (ölçüldü). Ardından verilen adres denenir.
+  const canon = canonicalArticleUrl(url);
+  const out = canon !== url ? [canon, url] : [url];
   try {
     const u = new URL(url);
     const host = u.hostname.replace(/^www\./, '');

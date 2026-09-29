@@ -297,3 +297,44 @@ export async function fetchPage(url, opts = {}) {
 export function laneConfig() {
   return { hostTotal: HOST_TOTAL, minGapMs: HOST_MIN_GAP_MS, lanes: Object.fromEntries(Object.keys(DEFAULTS).map((l) => [l, laneLimits(l)])) };
 }
+
+/**
+ * Yayıncı adresini kanonik biçime çevirir. İki gerçek sorun bundan çıkıyor:
+ *  1) NYT linkleri derleme verisinde `2026-09-28/world/…` olarak duruyor; bu
+ *     biçim NYT'de 404 veriyor (archive.nytimes.com'a düşüyor) ve arşiv kaydı
+ *     da bulunamıyor — asıl adres `2026/09/28/world/…`. Yani "duvar" sanılan
+ *     bir kısım haber aslında ölü linkti.
+ *  2) İzleme parametreleri (?utm_…, ?hp, ?campaignId, ?smid) yayıncının
+ *     önbelleğini ve arşiv anahtarını bozar; içerik parametreleri kalır.
+ */
+export function canonicalArticleUrl(value) {
+  let url;
+  try { url = new URL(String(value || '')); } catch { return String(value || ''); }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return String(value || '');
+  // 1) NYT'nin tireli tarih yolu (2026-09-28/…) 404 üretiyor; kanonik biçim
+  //    tarih klasörleridir (2026/09/28/…). Regex yerine düz parça kontrolü
+  //    kullanılıyor: kaynak dosyada kaçış karakteri hatası yapmak zor.
+  const parts = url.pathname.split('/');
+  if (parts.length > 4) {
+    const seg = parts[1] || '';
+    if (seg.length === 10 && seg[4] === '-' && seg[7] === '-'
+      && /^[0-9]+$/.test(seg.slice(0, 4)) && /^[0-9]+$/.test(seg.slice(5, 7)) && /^[0-9]+$/.test(seg.slice(8, 10))) {
+      parts.splice(1, 1, seg.slice(0, 4), seg.slice(5, 7), seg.slice(8, 10));
+      url.pathname = parts.join('/');
+    }
+  }
+  const host = url.hostname.replace(/^www\./, '');
+  if (host === 'nytimes.com' && !url.pathname.endsWith('.html')
+    && /^[0-9]{4}$/.test(parts[1] || '') && /^[0-9]{2}$/.test(parts[2] || '') && /^[0-9]{2}$/.test(parts[3] || '')) {
+    url.pathname = `${url.pathname.replace(/\/+$/, '')}.html`;
+  }
+  // 2) Yalnız izleme parametreleri atılır; diğerleri kalır (bir yayıncının
+  //    ?id= / ?outputType= parametresini silmek haberi bozardı).
+  const tracking = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'smid', 'campaignId', 'partner', 'hp', 'act', 'adxnnl', 'eapi', 'ab8', 'fbclid', 'gclid', 'mc_cid', 'mc_eid', 'cmpid', 'mbid'];
+  for (const k of [...url.searchParams.keys()]) {
+    if (tracking.includes(k) || k.startsWith('utm_')) url.searchParams.delete(k);
+  }
+  if (!url.searchParams.size) url.search = '';
+  url.hash = '';
+  return url.toString();
+}
